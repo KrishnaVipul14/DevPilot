@@ -12,8 +12,10 @@ from devpilot.ai.architect import ask_codebase
 from devpilot.ai.gemini import _read_dotenv_vars as _read_gemini_dotenv
 from devpilot.ai.groq import _read_dotenv_vars as _read_groq_dotenv
 from devpilot.ai.provider import AIProviderError, get_ai_provider
+from devpilot.ai.reviewer import generate_pr_description, review_changes
 from devpilot.ai.suggestions import explain_finding, generate_plan
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
+from devpilot.analyzers.dead_code import find_dead_code
 from devpilot.analyzers.mermaid import export_mermaid
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.core.config import load_config
@@ -349,3 +351,14 @@ class LocalAPI:
         if not symbol:
             raise APIHTTPError(400, "Missing required 'symbol' parameter.")
         return generate_test_scaffold(self._ctx(), symbol)
+
+    def get_deadcode(self) -> dict[str, Any]:
+        return find_dead_code(self._ctx())
+
+    def post_review(self, body: dict[str, Any]) -> dict[str, Any]:
+        base = str(body.get("base") or "HEAD").strip()
+        return review_changes(self._ctx(), base=base)
+
+    def post_pr(self, body: dict[str, Any]) -> dict[str, Any]:
+        base = str(body.get("base") or "HEAD").strip()
+        return generate_pr_description(self._ctx(), base=base)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bot, FlaskConical, GitCommit, Network, Search } from "lucide-react";
+import { Bot, FlaskConical, GitCommit, GitPullRequest, Network, Search, Trash2 } from "lucide-react";
 import { useData } from "@/components/DataProvider";
 import { Badge, InferredTag, RiskBadge } from "@/components/ui/Badge";
 import { Button, Spinner } from "@/components/ui/Button";
@@ -9,6 +9,8 @@ import { Card, PageHeader, Stat } from "@/components/ui/Card";
 import { CommandLine, EmptyState, ErrorBanner, NoScanState } from "@/components/ui/States";
 import { ArchitectAskModal } from "@/components/intelligence/ArchitectAskModal";
 import { ArchitectureMermaidModal } from "@/components/intelligence/ArchitectureMermaidModal";
+import { CodeReviewModal } from "@/components/intelligence/CodeReviewModal";
+import { DeadCodeModal } from "@/components/intelligence/DeadCodeModal";
 import { RouteExplorer } from "@/components/intelligence/RouteExplorer";
 import { TestScaffoldModal } from "@/components/intelligence/TestScaffoldModal";
 import { api, errorMessage } from "@/lib/api";
@@ -34,6 +36,8 @@ export default function IntelligencePage() {
   const [mermaidModalOpen, setMermaidModalOpen] = useState(false);
   const [testgenOpen, setTestgenOpen] = useState(false);
   const [testgenSymbol, setTestgenSymbol] = useState("");
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [deadCodeModalOpen, setDeadCodeModalOpen] = useState(false);
 
   const graph = graphState.data;
 
@@ -105,7 +109,21 @@ export default function IntelligencePage() {
         title="Code Intelligence & Change Impact"
         description="Static AST dependency graph, call relationships, route handlers, and Git blast-radius analysis"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              icon={<GitPullRequest className="h-3.5 w-3.5 text-sky-400" />}
+              onClick={() => setReviewModalOpen(true)}
+            >
+              PR Review & Generator
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Trash2 className="h-3.5 w-3.5 text-rose-400" />}
+              onClick={() => setDeadCodeModalOpen(true)}
+            >
+              Dead Code
+            </Button>
             <Button
               variant="secondary"
               icon={<Bot className="h-3.5 w-3.5 text-violet-400" />}
@@ -118,7 +136,7 @@ export default function IntelligencePage() {
               icon={<Network className="h-3.5 w-3.5 text-emerald-400" />}
               onClick={() => setMermaidModalOpen(true)}
             >
-              Export Architecture (Mermaid)
+              Export Architecture
             </Button>
           </div>
         }
@@ -439,6 +457,14 @@ export default function IntelligencePage() {
         open={testgenOpen}
         onClose={() => setTestgenOpen(false)}
         defaultSymbol={testgenSymbol}
+      />
+      <CodeReviewModal
+        open={reviewModalOpen}
+        onClose={() => setReviewModalOpen(false)}
+      />
+      <DeadCodeModal
+        open={deadCodeModalOpen}
+        onClose={() => setDeadCodeModalOpen(false)}
       />
     </>
   );

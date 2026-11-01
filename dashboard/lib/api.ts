@@ -129,4 +129,38 @@ export const api = {
       test_code: string;
       error?: string;
     }>("/api/testgen", { symbol }),
+  deadcode: () =>
+    get<{
+      dead_symbols_count: number;
+      lines_reclaimable: number;
+      symbols: Array<{
+        id: string;
+        name: string;
+        kind: string;
+        file: string;
+        line: number | null;
+        lines_of_code: number;
+        reason: string;
+      }>;
+    }>("/api/deadcode"),
+  review: (base = "HEAD~1") =>
+    post<{
+      verdict: string;
+      summary: string;
+      key_strengths: string[];
+      critical_risks: string[];
+      actionable_suggestions: string[];
+      markdown_review: string;
+      provider: string;
+    }>("/api/review", { base }),
+  pr: (base = "HEAD~1") =>
+    post<{
+      title: string;
+      summary: string;
+      changes: string[];
+      impact: string;
+      testing_plan: string[];
+      markdown_pr: string;
+      provider: string;
+    }>("/api/pr", { base }),
 };

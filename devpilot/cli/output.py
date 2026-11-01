@@ -370,3 +370,43 @@ def print_test_scaffold(scaffold: dict[str, Any]) -> None:
     code = scaffold.get("test_code", "")
     lang = scaffold.get("language", "python")
     console.print(Syntax(code, lang, theme="monokai", line_numbers=True, word_wrap=True))
+
+
+def print_review(review: dict[str, Any]) -> None:
+    """Print automated staff-engineer code review in Rich panel."""
+    verdict = review.get("verdict", "COMMENT")
+    color = "green" if verdict == "APPROVE" else "yellow" if verdict == "COMMENT" else "red"
+    title = f"[bold {color}]DevPilot Code Review: {verdict}[/bold {color}]"
+    console.print(Panel(Markdown(review.get("markdown_review", "")), title=title, border_style=color))
+
+
+def print_pr_description(pr: dict[str, Any]) -> None:
+    """Print generated PR description in Rich panel."""
+    title = f"[bold cyan]Generated PR: {pr.get('title', 'Pull Request')}[/bold cyan]"
+    console.print(Panel(Markdown(pr.get("markdown_pr", "")), title=title, border_style="cyan"))
+
+
+def print_dead_code(res: dict[str, Any]) -> None:
+    """Print dead code report in a structured Rich table."""
+    count = res.get("dead_symbols_count", 0)
+    lines = res.get("lines_reclaimable", 0)
+    if count == 0:
+        console.print(
+            "[bold green]Zero dead code or orphaned symbols detected! Codebase is lean.[/bold green]"
+        )
+        return
+    table = Table(title=f"Dead Code Candidates ({count} symbols, ~{lines} lines reclaimable)")
+    table.add_column("Symbol", style="bold")
+    table.add_column("Kind")
+    table.add_column("File:Line")
+    table.add_column("Lines", justify="right")
+    table.add_column("Reason", style="dim")
+    for s in res.get("symbols", []):
+        table.add_row(
+            s["name"],
+            s["kind"],
+            f"{s['file']}:{s['line']}",
+            str(s["lines_of_code"]),
+            s["reason"],
+        )
+    console.print(table)

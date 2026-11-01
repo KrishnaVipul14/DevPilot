@@ -17,6 +17,7 @@ from typing import Any
 
 from devpilot.ai.provider import AIProvider, AIProviderError, AIStatus, is_ai_disabled
 from devpilot.core.config import DevPilotConfig
+from devpilot.utils.http import open_url
 
 DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 FALLBACK_MODELS = [
@@ -138,7 +139,7 @@ class GeminiProvider(AIProvider):
             headers={"x-goog-api-key": self._api_key()},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with open_url(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception:  # noqa: BLE001
             return None
@@ -175,7 +176,7 @@ class GeminiProvider(AIProvider):
                 "x-goog-api-key": self._api_key(),
             },
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open_url(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def generate_json(self, system_prompt: str, user_prompt: str, timeout: float = 60) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from typing import Any
 
 from devpilot.ai.provider import AIProvider, AIProviderError, AIStatus, is_ai_disabled
 from devpilot.core.config import DevPilotConfig
+from devpilot.utils.http import open_url
 
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 FALLBACK_GROQ_MODELS = [
@@ -129,7 +130,7 @@ class GroqProvider(AIProvider):
             headers={"Authorization": f"Bearer {self._api_key()}", "User-Agent": USER_AGENT},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with open_url(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception:  # noqa: BLE001
             return []
@@ -168,7 +169,7 @@ class GroqProvider(AIProvider):
                 "User-Agent": USER_AGENT,
             },
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open_url(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def generate_json(self, system_prompt: str, user_prompt: str, timeout: float = 60) -> dict[str, Any]:

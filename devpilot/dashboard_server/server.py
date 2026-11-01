@@ -99,6 +99,8 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
                     self._send_json(200, self.api.get_settings())
                 elif path.rstrip("/") == "/api/mermaid":
                     self._send_json(200, self.api.get_mermaid())
+                elif path.rstrip("/") == "/api/deadcode":
+                    self._send_json(200, self.api.get_deadcode())
                 else:
                     self._send_json(404, {"error": f"Unknown API endpoint {path}"})
             except APIHTTPError as exc:
@@ -119,6 +121,9 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
             "/api/scan": lambda: self.api.post_scan(body),
             "/api/ask": lambda: self.api.post_ask(body),
             "/api/testgen": lambda: self.api.post_testgen(body),
+            "/api/review": lambda: self.api.post_review(body),
+            "/api/pr": lambda: self.api.post_pr(body),
+            "/api/deadcode": lambda: self.api.get_deadcode(),
         }
         if norm in handlers:
             return 200, handlers[norm]()

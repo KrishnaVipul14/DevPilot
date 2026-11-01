@@ -1115,3 +1115,106 @@ def test_architect_ask_testgen_and_mermaid_api() -> None:
     # Check api.post_testgen()
     t_res = api.post_testgen({"symbol": "validate_token"})
     assert t_res["success"] is True
+
+
+def test_ai_provider_selection_and_http_resilience(monkeypatch: pytest.MonkeyPatch) -> None:
+    from devpilot.ai.provider import get_ai_provider
+    from devpilot.ai.suggestions import explain_finding
+    from devpilot.core.models import Confidence, Finding, Severity
+
+    # Test provider selection via environment variable
+    monkeypatch.setenv("DEVPILOT_AI_PROVIDER", "gemini")
+    provider = get_ai_provider()
+    assert provider.name == "gemini"
+
+    monkeypatch.setenv("DEVPILOT_AI_PROVIDER", "groq")
+    provider_groq = get_ai_provider()
+    assert provider_groq.name == "groq"
+
+    # Test explain_finding graceful offline fallback
+    finding = Finding(
+        id="DP001",
+        module="security",
+        rule="sec-sql-injection",
+        severity=Severity.HIGH,
+        confidence=Confidence.HIGH,
+        file="auth.py",
+        line=42,
+        title="Unsanitized SQL Input",
+        evidence="Raw query concatenation detected in login routine.",
+        suggestion="Use parameterized queries instead of f-strings.",
+    )
+    demo_root = Path("examples/demo-app").resolve()
+    ctx = RepoContext(root=demo_root, config=load_config(demo_root))
+
+    explanation = explain_finding(ctx, finding)
+    assert explanation.summary != ""
+    assert "Unsanitized SQL Input" in explanation.summary
+    assert explanation.recommendation != ""
+    assert explanation.provider in ("groq", "gemini", "deterministic-engine")
+
+
+def test_dead_code_analyzer_and_cli(tmp_path: Path) -> None:
+    from devpilot.analyzers.dead_code import find_dead_code
+    from devpilot.analyzers.repository_graph import RepoGraph
+
+    test_file = tmp_path / "service.py"
+    test_file.write_text(
+        "def active_func():\n"
+        "    return 1\n\n"
+        "def orphaned_func():\n"
+        "    return 2\n\n"
+        "def caller():\n"
+        "    return active_func()\n",
+        encoding="utf-8",
+    )
+    ctx = RepoContext(root=tmp_path, config=load_config(tmp_path))
+    graph = RepoGraph.build(ctx)
+    dead = find_dead_code(ctx, graph=graph)
+
+    assert "symbols" in dead
+    names = [s["name"] for s in dead["symbols"]]
+    assert "orphaned_func" in names
+    assert "caller" in names
+    assert "active_func" not in names
+
+    # CLI deadcode test
+    cli_res = runner.invoke(app, ["deadcode", "-p", str(tmp_path), "--json"])
+    assert cli_res.exit_code == 0
+    data = json.loads(cli_res.output)
+    assert any(s["name"] == "orphaned_func" for s in data["symbols"])
+
+
+def test_reviewer_and_pr_generator_api() -> None:
+    from devpilot.ai.reviewer import generate_pr_description, review_changes
+    from devpilot.dashboard_server.api import LocalAPI
+
+    demo_root = Path("examples/demo-app").resolve()
+    ctx = RepoContext(root=demo_root, config=load_config(demo_root))
+
+    # Test review_changes fallback / execution
+    review = review_changes(ctx, base="HEAD~1")
+    assert "verdict" in review
+    assert "summary" in review
+    assert "key_strengths" in review
+    assert isinstance(review["actionable_suggestions"], list)
+
+    # Test generate_pr_description
+    pr_desc = generate_pr_description(ctx, base="HEAD~1")
+    assert "title" in pr_desc
+    assert "summary" in pr_desc
+    assert "testing_plan" in pr_desc
+
+    # Test LocalAPI review, pr, and deadcode endpoints
+    api = LocalAPI(demo_root)
+    deadcode_res = api.get_deadcode()
+    assert "symbols" in deadcode_res
+    assert "dead_symbols_count" in deadcode_res
+
+    rev_res = api.post_review({"base": "HEAD~1"})
+    assert "verdict" in rev_res
+    assert "summary" in rev_res
+
+    pr_res = api.post_pr({"base": "HEAD~1"})
+    assert "title" in pr_res
+    assert "summary" in pr_res

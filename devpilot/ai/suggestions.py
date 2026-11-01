@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from devpilot.ai.context_builder import build_finding_context
@@ -17,6 +18,45 @@ from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.core.context import RepoContext
 from devpilot.core.models import AIExplanation, Finding, Report
 from devpilot.memory.database import MemoryDB
+
+
+def _build_deterministic_explanation(
+    ctx: RepoContext, finding: Finding, graph: RepoGraph | None = None
+) -> AIExplanation:
+    impact_desc = "May affect runtime correctness or operational stability."
+    if finding.severity.value in ("critical", "high"):
+        impact_desc = f"Critical risk: `{finding.rule}` can lead to production crashes, security bypass, or data leakage if triggered."
+    elif finding.module == "dependencies":
+        impact_desc = (
+            "Vulnerable dependency contains publicly known CVEs and could be exploited by remote actors."
+        )
+    elif finding.module == "setup_doctor":
+        impact_desc = (
+            "Environment discrepancy can cause onboarding failure, deployment crashes, or leaked credentials."
+        )
+
+    tests: list[str] = []
+    if finding.file:
+        stem = Path(finding.file).stem
+        if finding.file.endswith(".py"):
+            tests.append(f"pytest tests/test_{stem}.py -v")
+        elif finding.file.endswith((".js", ".ts", ".tsx", ".jsx")):
+            tests.append(f"npm test -- {stem}")
+    if not tests:
+        tests.append("devpilot scan .")
+
+    return AIExplanation(
+        finding_fingerprint=finding.fingerprint,
+        provider="deterministic-engine",
+        model="offline",
+        summary=f"Analysis of {finding.rule}: {finding.title}",
+        root_cause=f"{finding.evidence}\n\nDetected at {finding.file}:{finding.line} by '{finding.module}' analyzer.",
+        impact=impact_desc,
+        recommendation=finding.suggestion
+        or "Inspect the referenced line and apply the recommended fix pattern.",
+        suggested_tests=tests,
+        caveats="Deterministic offline explanation generated from AST & static analysis rules (configure an AI key in settings for conversational reasoning).",
+    )
 
 
 def explain_finding(
@@ -34,33 +74,38 @@ def explain_finding(
     provider = get_ai_provider(ctx.config)
     st = provider.status()
     if not st.available:
-        raise AIProviderError(st.reason)
+        return _build_deterministic_explanation(ctx, finding, graph)
 
-    context = build_finding_context(ctx, finding, graph=graph)
-    raw = provider.generate_json(
-        EXPLAIN_SYSTEM_PROMPT,
-        build_explain_user_prompt(context),
-        timeout=ctx.config.ai.timeout,
-    )
-    tests = raw.get("suggested_tests")
-    if not isinstance(tests, list):
-        tests = [str(tests)] if tests else []
+    try:
+        context = build_finding_context(ctx, finding, graph=graph)
+        raw = provider.generate_json(
+            EXPLAIN_SYSTEM_PROMPT,
+            build_explain_user_prompt(context),
+            timeout=ctx.config.ai.timeout,
+        )
+        tests = raw.get("suggested_tests")
+        if not isinstance(tests, list):
+            tests = [str(tests)] if tests else []
 
-    explanation = AIExplanation(
-        finding_fingerprint=finding.fingerprint,
-        provider=provider.name,
-        model=provider.model,
-        summary=str(raw.get("summary") or finding.title).strip(),
-        root_cause=str(raw.get("root_cause") or finding.evidence).strip(),
-        impact=str(raw.get("impact") or "May affect code reliability, security, or maintainability.").strip(),
-        recommendation=str(raw.get("recommendation") or finding.suggestion).strip(),
-        suggested_tests=[str(t) for t in tests if t],
-        caveats=str(
-            raw.get("caveats") or "Derived from static analysis and LLM reasoning; verify with tests."
-        ).strip(),
-    )
-    db.save_explanation(explanation)
-    return explanation
+        explanation = AIExplanation(
+            finding_fingerprint=finding.fingerprint,
+            provider=provider.name,
+            model=provider.model,
+            summary=str(raw.get("summary") or finding.title).strip(),
+            root_cause=str(raw.get("root_cause") or finding.evidence).strip(),
+            impact=str(
+                raw.get("impact") or "May affect code reliability, security, or maintainability."
+            ).strip(),
+            recommendation=str(raw.get("recommendation") or finding.suggestion).strip(),
+            suggested_tests=[str(t) for t in tests if t],
+            caveats=str(
+                raw.get("caveats") or "Derived from static analysis and LLM reasoning; verify with tests."
+            ).strip(),
+        )
+        db.save_explanation(explanation)
+        return explanation
+    except Exception:  # noqa: BLE001
+        return _build_deterministic_explanation(ctx, finding, graph)
 
 
 def _categorize_findings(findings: list[Finding]) -> list[tuple[str, str, str, list[Finding], str]]:

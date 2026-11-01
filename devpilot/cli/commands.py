@@ -12,19 +12,24 @@ import typer
 from devpilot import __version__
 from devpilot.ai.architect import ask_codebase
 from devpilot.ai.provider import AIProviderError
+from devpilot.ai.reviewer import generate_pr_description, review_changes
 from devpilot.ai.suggestions import explain_finding, generate_plan
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
+from devpilot.analyzers.dead_code import find_dead_code
 from devpilot.analyzers.mermaid import export_mermaid
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.cli.output import (
     console,
     err_console,
     print_ask_answer,
+    print_dead_code,
     print_finding_detail,
     print_history,
     print_impact,
     print_patch,
     print_plan,
+    print_pr_description,
+    print_review,
     print_scan_report,
     print_test_scaffold,
 )
@@ -635,3 +640,58 @@ def cmd_mermaid(
         console.print(f"[green]Exported Mermaid diagram to:[/green] {output}")
     else:
         print(chart)
+
+
+@app.command("review")
+def cmd_review(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    base: str = typer.Option(
+        "HEAD~1", "--base", "-b", help="Git base ref or commit to diff against (e.g. HEAD~1, main)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output review as raw JSON."),
+) -> None:
+    """Perform automated Staff-Engineer code review on git changes with AST impact analysis."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    cached = load_latest_graph(root)
+    graph = RepoGraph.from_dict(cached) if cached else RepoGraph.build(ctx)
+    review = review_changes(ctx, base=base, graph=graph)
+    if json_out:
+        print(json.dumps(review, indent=2))
+    else:
+        print_review(review)
+
+
+@app.command("pr")
+def cmd_pr(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    base: str = typer.Option(
+        "HEAD~1", "--base", "-b", help="Git base ref or branch to diff against (e.g. main, HEAD~1)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output PR description as raw JSON."),
+) -> None:
+    """Generate high-quality PR title, summary, key changes, and test instructions from git diff."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    res = generate_pr_description(ctx, base=base)
+    if json_out:
+        print(json.dumps(res, indent=2))
+    else:
+        print_pr_description(res)
+
+
+@app.command("deadcode")
+def cmd_deadcode(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    json_out: bool = typer.Option(False, "--json", help="Output dead code report as raw JSON."),
+) -> None:
+    """Find dead, orphaned, or unreferenced functions and classes in the codebase."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    cached = load_latest_graph(root)
+    graph = RepoGraph.from_dict(cached) if cached else RepoGraph.build(ctx)
+    results = find_dead_code(ctx, graph=graph)
+    if json_out:
+        print(json.dumps(results, indent=2))
+    else:
+        print_dead_code(results)
