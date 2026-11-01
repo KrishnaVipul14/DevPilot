@@ -274,3 +274,82 @@ def test_server_mime_and_path_traversal_protection(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
 
+
+def test_settings_and_repository_change_endpoints(tmp_path: Path) -> None:
+    repo1 = tmp_path / "repo1"
+    repo1.mkdir()
+    (repo1 / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    repo2 = tmp_path / "repo2"
+    repo2.mkdir()
+    (repo2 / "app.py").write_text("y = 2\n", encoding="utf-8")
+
+    server = create_server(repo1, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}"
+
+    try:
+        # 1. GET /api/settings
+        req = urllib.request.Request(f"{base_url}/api/settings")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["repository"]["path"] == str(repo1)
+            assert "ai" in data
+
+        # 2. POST /api/settings (update AI provider and keys)
+        update_body = json.dumps({
+            "provider": "gemini",
+            "model": "gemini-1.5-flash",
+            "gemini_api_key": "AIzaSyTestGeminiKey1234",
+            "persist_to_env": False,
+        }).encode("utf-8")
+        post_req = urllib.request.Request(
+            f"{base_url}/api/settings",
+            data=update_body,
+            headers={"Content-Type": "application/json", "X-DevPilot": "1"},
+        )
+        with urllib.request.urlopen(post_req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["ai"]["provider"] == "gemini"
+            assert data["ai"]["has_gemini_key"] is True
+            assert "AIza••••1234" in data["ai"]["gemini_key_preview"]
+
+        # 3. POST /api/repository (switch directory)
+        repo_body = json.dumps({"path": str(repo2)}).encode("utf-8")
+        repo_req = urllib.request.Request(
+            f"{base_url}/api/repository",
+            data=repo_body,
+            headers={"Content-Type": "application/json", "X-DevPilot": "1"},
+        )
+        with urllib.request.urlopen(repo_req, timeout=5) as resp:
+            status = json.loads(resp.read().decode("utf-8"))
+            assert status["repository"]["path"] == str(repo2)
+
+        # 4. POST /api/repository invalid path -> 400
+        bad_repo_body = json.dumps({"path": str(tmp_path / "does_not_exist")}).encode("utf-8")
+        bad_req = urllib.request.Request(
+            f"{base_url}/api/repository",
+            data=bad_repo_body,
+            headers={"Content-Type": "application/json", "X-DevPilot": "1"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(bad_req, timeout=5)
+        assert exc_info.value.code == 400
+
+        # 5. POST /api/scan (trigger scan on active repo)
+        scan_body = json.dumps({"offline": True}).encode("utf-8")
+        scan_req = urllib.request.Request(
+            f"{base_url}/api/scan",
+            data=scan_body,
+            headers={"Content-Type": "application/json", "X-DevPilot": "1"},
+        )
+        with urllib.request.urlopen(scan_req, timeout=10) as resp:
+            scan_res = json.loads(resp.read().decode("utf-8"))
+            assert "report" in scan_res
+            assert scan_res["report"]["repository"]["path"] == str(repo2)
+    finally:
+        server.shutdown()
+        server.server_close()
+

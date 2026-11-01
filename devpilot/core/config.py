@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -96,17 +97,26 @@ def find_config(root: Path) -> Path | None:
 def load_config(root: Path) -> DevPilotConfig:
     path = find_config(root)
     if path is None:
-        return DevPilotConfig()
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"Invalid YAML in {path.name}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ConfigError(f"{path.name} must contain a mapping at the top level")
-    try:
-        return DevPilotConfig.model_validate(data)
-    except ValidationError as exc:
-        raise ConfigError(f"Invalid configuration in {path.name}:\n{exc}") from exc
+        cfg = DevPilotConfig()
+    else:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise ConfigError(f"Invalid YAML in {path.name}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ConfigError(f"{path.name} must contain a mapping at the top level")
+        try:
+            cfg = DevPilotConfig.model_validate(data)
+        except ValidationError as exc:
+            raise ConfigError(f"Invalid configuration in {path.name}:\n{exc}") from exc
+
+    env_provider = os.environ.get("DEVPILOT_AI_PROVIDER", "").strip().lower()
+    if env_provider in ("groq", "gemini"):
+        cfg.ai.provider = env_provider  # type: ignore[assignment]
+    env_model = os.environ.get("DEVPILOT_AI_MODEL", "").strip()
+    if env_model:
+        cfg.ai.model = env_model
+    return cfg
 
 
 DEFAULT_CONFIG_TEMPLATE = """\

@@ -3,10 +3,11 @@ PYTHON ?= python3
 VENV ?= .venv
 BIN ?= $(VENV)/bin
 
-.PHONY: help setup install test lint scan dashboard demo clean build-dashboard
+.PHONY: help start setup install test lint scan dashboard demo clean build-dashboard
 
 help:
 	@echo "Available commands:"
+	@echo "  make start            Run ./start.sh (setup environment + launch dashboard)"
 	@echo "  make setup            Create virtual environment and install DevPilot with dev dependencies"
 	@echo "  make test             Run test suite with pytest"
 	@echo "  make lint             Run ruff checks across devpilot and tests"
@@ -17,6 +18,9 @@ help:
 	@echo "  make clean            Remove build artifacts and virtual environment"
 
 setup: $(VENV)/bin/activate
+
+start: setup
+	./start.sh
 
 $(VENV)/bin/activate:
 	$(PYTHON) -m venv $(VENV)

@@ -277,3 +277,42 @@ export interface Patch {
 }
 
 export type FixEngine = "auto" | "ruff" | "ai";
+
+export interface SettingsResponse {
+  repository: {
+    name: string;
+    path: string;
+    exists: boolean;
+    has_devpilot_yaml: boolean;
+    has_report: boolean;
+  };
+  ai: {
+    available: boolean;
+    provider: string | null;
+    model: string | null;
+    reason: string | null;
+    has_groq_key: boolean;
+    groq_key_preview: string;
+    has_gemini_key: boolean;
+    gemini_key_preview: string;
+  };
+}
+
+export interface UpdateSettingsRequest {
+  repository_path?: string;
+  provider?: "groq" | "gemini";
+  model?: string;
+  groq_api_key?: string;
+  gemini_api_key?: string;
+  persist_to_env?: boolean;
+}
+
+export interface ScanRequest {
+  path?: string;
+  offline?: boolean;
+}
+
+export interface ScanResponse {
+  status: StatusResponse;
+  report: Report;
+}

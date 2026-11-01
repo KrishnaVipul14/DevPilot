@@ -29,6 +29,7 @@ interface DataContextValue {
   /** True for a few seconds after a new scan was picked up. */
   justUpdated: boolean;
   refreshReport: () => Promise<void>;
+  refreshAll: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -69,6 +70,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshAll = useCallback(async () => {
+    try {
+      const s = await api.status();
+      setStatus(s);
+      setConnection("online");
+      const key = `${s.repository?.path ?? ""}|${s.has_report}|${s.scan_id ?? ""}|${s.report_mtime ?? ""}`;
+      lastKey.current = key;
+      await refreshReport();
+      setVersion((v) => v + 1);
+    } catch (err) {
+      if (isNetworkError(err)) setConnection("offline");
+    }
+  }, [refreshReport]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -78,7 +93,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setStatus(s);
         setConnection("online");
-        const key = `${s.has_report}|${s.scan_id ?? ""}|${s.report_mtime ?? ""}`;
+        const key = `${s.repository?.path ?? ""}|${s.has_report}|${s.scan_id ?? ""}|${s.report_mtime ?? ""}`;
         if (key !== lastKey.current) {
           const isFirst = lastKey.current === null;
           lastKey.current = key;
@@ -123,6 +138,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         version,
         justUpdated,
         refreshReport,
+        refreshAll,
       }}
     >
       {children}
