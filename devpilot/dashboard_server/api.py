@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from devpilot.ai.gemini import _read_dotenv_vars as _read_gemini_dotenv
+from devpilot.ai.groq import _read_dotenv_vars as _read_groq_dotenv
 from devpilot.ai.provider import AIProviderError, get_ai_provider
 from devpilot.ai.suggestions import explain_finding, generate_plan
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
@@ -18,9 +22,40 @@ from devpilot.core.report import (
     load_latest_graph,
     load_latest_report,
 )
+from devpilot.core.scanner import run_scan
 from devpilot.fixes.patch_generator import PatchError, propose_patch
 from devpilot.fixes.patch_manager import apply_patch, discard_patch, verify_patch
 from devpilot.memory.database import MemoryDB
+
+
+def update_dotenv_file(filepath: Path, updates: dict[str, str]) -> None:
+    """Safely update or append keys in a .env file without deleting comments or other variables."""
+    lines: list[str] = []
+    if filepath.is_file():
+        try:
+            lines = filepath.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+
+    remaining_keys = set(updates.keys())
+    new_lines: list[str] = []
+    key_pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+    for line in lines:
+        match = key_pattern.match(line)
+        if match:
+            k = match.group(1)
+            if k in updates:
+                new_lines.append(f"{k}={updates[k]}")
+                remaining_keys.discard(k)
+                continue
+        new_lines.append(line)
+
+    for k in sorted(remaining_keys):
+        new_lines.append(f"{k}={updates[k]}")
+
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    filepath.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
 class APIHTTPError(Exception):
@@ -145,3 +180,119 @@ class LocalAPI:
         except PatchError as exc:
             raise APIHTTPError(400, str(exc)) from exc
         return {"patch": patch}
+
+    def set_repository(self, path_str: str) -> Path:
+        target = Path(path_str).expanduser().resolve()
+        if not target.is_dir():
+            raise APIHTTPError(400, f"Directory does not exist: {target}")
+        self.root = target
+        return self.root
+
+    def _mask_key(self, key: str) -> str:
+        if not key:
+            return ""
+        if len(key) <= 8:
+            return "••••" + key[-2:]
+        return key[:4] + "••••" + key[-4:]
+
+    def get_settings(self) -> dict[str, Any]:
+        cfg = load_config(self.root)
+        st = get_ai_provider(cfg).status()
+        groq_env = os.environ.get("GROQ_API_KEY", "").strip() or _read_groq_dotenv().get("GROQ_API_KEY", "").strip()
+        gemini_env = (
+            os.environ.get("GEMINI_API_KEY", "").strip()
+            or os.environ.get("GOOGLE_API_KEY", "").strip()
+            or _read_gemini_dotenv().get("GEMINI_API_KEY", "").strip()
+            or _read_gemini_dotenv().get("GOOGLE_API_KEY", "").strip()
+        )
+        rpath = latest_report_path(self.root)
+        has_cfg = any(
+            (self.root / fn).is_file() for fn in ("devpilot.yml", "devpilot.yaml", ".devpilot.yml")
+        )
+        return {
+            "repository": {
+                "name": self.root.name,
+                "path": str(self.root),
+                "exists": self.root.is_dir(),
+                "has_devpilot_yaml": has_cfg,
+                "has_report": rpath.is_file(),
+            },
+            "ai": {
+                "available": st.available,
+                "provider": cfg.ai.provider,
+                "model": st.model,
+                "reason": st.reason,
+                "has_groq_key": bool(groq_env),
+                "groq_key_preview": self._mask_key(groq_env),
+                "has_gemini_key": bool(gemini_env),
+                "gemini_key_preview": self._mask_key(gemini_env),
+            },
+        }
+
+    def _apply_ai_settings(self, body: dict[str, Any]) -> dict[str, str]:
+        dotenv_updates: dict[str, str] = {}
+        provider = body.get("provider")
+        if isinstance(provider, str) and provider.strip().lower() in ("groq", "gemini"):
+            p = provider.strip().lower()
+            os.environ["DEVPILOT_AI_PROVIDER"] = p
+            dotenv_updates["DEVPILOT_AI_PROVIDER"] = p
+
+        model = body.get("model")
+        if isinstance(model, str):
+            m = model.strip()
+            if m:
+                os.environ["DEVPILOT_AI_MODEL"] = m
+                dotenv_updates["DEVPILOT_AI_MODEL"] = m
+            else:
+                os.environ.pop("DEVPILOT_AI_MODEL", None)
+
+        groq_key = body.get("groq_api_key")
+        if isinstance(groq_key, str) and groq_key.strip():
+            gk = groq_key.strip()
+            os.environ["GROQ_API_KEY"] = gk
+            dotenv_updates["GROQ_API_KEY"] = gk
+
+        gemini_key = body.get("gemini_api_key")
+        if isinstance(gemini_key, str) and gemini_key.strip():
+            gk = gemini_key.strip()
+            os.environ["GEMINI_API_KEY"] = gk
+            dotenv_updates["GEMINI_API_KEY"] = gk
+
+        return dotenv_updates
+
+    def post_settings(self, body: dict[str, Any]) -> dict[str, Any]:
+        repo_path = body.get("repository_path")
+        if isinstance(repo_path, str) and repo_path.strip():
+            self.set_repository(repo_path.strip())
+
+        dotenv_updates = self._apply_ai_settings(body)
+        if body.get("persist_to_env", True) and dotenv_updates:
+            env_file = Path.cwd() / ".env"
+            update_dotenv_file(env_file, dotenv_updates)
+            repo_env = self.root / ".env"
+            if repo_env != env_file and repo_env.is_file():
+                update_dotenv_file(repo_env, dotenv_updates)
+
+        return self.get_settings()
+
+    def post_repository(self, body: dict[str, Any]) -> dict[str, Any]:
+        path_str = body.get("path")
+        if not path_str or not isinstance(path_str, str):
+            raise APIHTTPError(400, "Missing required 'path' parameter in request body.")
+        self.set_repository(path_str.strip())
+        return self.get_status()
+
+    def post_scan(self, body: dict[str, Any]) -> dict[str, Any]:
+        path_str = body.get("path")
+        if isinstance(path_str, str) and path_str.strip():
+            self.set_repository(path_str.strip())
+        offline = bool(body.get("offline", False))
+        cfg = load_config(self.root)
+        try:
+            report = run_scan(self.root, config=cfg, offline=offline, persist=True)
+        except Exception as exc:
+            raise APIHTTPError(500, f"Scan failed: {exc}") from exc
+        return {
+            "status": self.get_status(),
+            "report": report.model_dump(mode="json"),
+        }

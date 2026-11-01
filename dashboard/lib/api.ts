@@ -7,7 +7,11 @@ import type {
   Patch,
   Plan,
   Report,
+  ScanRequest,
+  ScanResponse,
+  SettingsResponse,
   StatusResponse,
+  UpdateSettingsRequest,
 } from "./types";
 
 /** Base URL for the local DevPilot API. Empty string = same origin (production). */
@@ -93,4 +97,11 @@ export const api = {
   verifyPatch: (id: string) => post<{ patch: Patch }>(`/api/patches/${enc(id)}/verify`),
   applyPatch: (id: string) => post<{ patch: Patch }>(`/api/patches/${enc(id)}/apply`),
   discardPatch: (id: string) => post<{ patch: Patch }>(`/api/patches/${enc(id)}/discard`),
+  settings: () => get<SettingsResponse>("/api/settings"),
+  updateSettings: (body: UpdateSettingsRequest) =>
+    post<SettingsResponse>("/api/settings", body),
+  changeRepository: (path: string) =>
+    post<StatusResponse>("/api/repository", { path }),
+  scan: (options: ScanRequest = {}) =>
+    post<ScanResponse>("/api/scan", options),
 };

@@ -95,6 +95,8 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
                     self._send_json(200, self.api.get_plan())
                 elif path.rstrip("/") == "/api/patches":
                     self._send_json(200, self.api.get_patches())
+                elif path.rstrip("/") == "/api/settings":
+                    self._send_json(200, self.api.get_settings())
                 else:
                     self._send_json(404, {"error": f"Unknown API endpoint {path}"})
             except APIHTTPError as exc:
@@ -123,6 +125,15 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
         try:
             if path.rstrip("/") == "/api/plan":
                 self._send_json(200, self.api.post_plan())
+                return
+            if path.rstrip("/") == "/api/settings":
+                self._send_json(200, self.api.post_settings(body))
+                return
+            if path.rstrip("/") == "/api/repository":
+                self._send_json(200, self.api.post_repository(body))
+                return
+            if path.rstrip("/") == "/api/scan":
+                self._send_json(200, self.api.post_scan(body))
                 return
             m = _EXPLAIN_RE.match(path)
             if m:
