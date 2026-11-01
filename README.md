@@ -1,93 +1,92 @@
-# DevPilot — Your Repository's AI Engineering Assistant
+# DevPilot
 
-> **"Understand your codebase. Fix problems. Verify improvements. Build better software."**
+**Your repository's AI engineering assistant.**  
+*Understand your codebase. Fix problems. Verify improvements. Build better software.*
 
-DevPilot is a local-first, CLI-first repository intelligence and engineering assistant for Python projects. It unifies static code health analysis, dependency vulnerability auditing, configuration & secret hygiene, documentation drift detection, AST code-relationship graphing, Git change-impact analysis, safe isolated fix verification, and SQLite repository memory into one cohesive workflow:
+---
+
+## What is DevPilot?
+
+When you work on a real project, you end up jumping between five different tools just to keep things healthy: a linter for code bugs, a security scanner for dependencies, grep to see what breaks if you change a function, a test runner to check your fix, and notes to remember what you already fixed last week.
+
+**DevPilot** brings all of that into one local tool.
+
+You run it from your terminal. It scans your project, maps out how your files and functions connect, tells you what's broken (and what's risky to change), helps you generate fixes, **tests those fixes in a safe temporary copy of your repo before touching your actual files**, and remembers every scan over time.
+
+It also comes with a clean local web dashboard that runs on `127.0.0.1` — no cloud account, no external database, and no uploading your code to third-party servers.
+
+---
+
+## How the workflow works
 
 ```text
-DETECT → UNDERSTAND → ANALYZE IMPACT → PRIORITIZE → FIX → VERIFY → REMEMBER
+DETECT  →  UNDERSTAND  →  ANALYZE IMPACT  →  PRIORITIZE  →  FIX  →  VERIFY  →  REMEMBER
 ```
 
----
-
-## Architecture Overview
-
-```text
-CLI (Typer) ──► Scanner & Analyzer Registry
-                   ├── Code Health (Ruff + AST maintainability)
-                   ├── Dependency Security (OSV.dev / pip-audit + CVSS v3)
-                   ├── Configuration & Setup Doctor (.env vs code, secret hygiene)
-                   ├── Documentation Drift (README examples & docstring params vs AST)
-                   ├── Repository Intelligence Graph (AST modules, defs, calls, routes, tests)
-                   └── Git Change Impact Analysis (diff → symbols → callers/routes/tests → risk)
-                        │
-                        ▼
-           Unified Validated Report (.devpilot/reports/latest.json)
-                        │
-                        ├──► SQLite Repository Memory (.devpilot/devpilot.db)
-                        ├──► Safe Fix & Isolated Git Worktree Verifier
-                        ├──► Modular AI Assistant (Gemini API + deterministic fallback)
-                        └──► Local Python HTTP Server (127.0.0.1) ──► Next.js Dashboard
-```
+1. **Detect** — Finds code bugs, vulnerable packages, missing `.env` config, hardcoded secrets, and outdated docs.
+2. **Understand** — Builds a map of your Python files, functions, classes, API routes, and tests. You can also ask AI to explain any issue in plain English.
+3. **Analyze Impact** — Looks at your `git diff` (or any function name you pick) and shows which functions, API routes, and tests depend on it.
+4. **Prioritize** — Groups findings into a step-by-step action plan so you tackle critical bugs and security issues first.
+5. **Fix** — Creates a code diff for a problem (using either fast deterministic rules or AI).
+6. **Verify** — Applies the diff inside an isolated Git worktree and runs syntax checks, Ruff, and `pytest` to prove the fix actually works before you apply it to your working tree.
+7. **Remember** — Saves every scan in a local SQLite database (`.devpilot/devpilot.db`) so you can see which issues are new, resolved, or reintroduced.
 
 ---
 
-## Core Modules
+## Quick Start (2 minutes)
 
-1. **Module A — Automated Repository Scanner (`devpilot/analyzers/`)**
-   - **Code Health (`code_health.py`):** Runs Ruff (`F`, `E9`, `B`, `C901`, `S102/S307/S506/S602`, `E722`) plus AST checks for overly long functions and excessive parameters.
-   - **Dependency Security (`dependencies.py`, `osv.py`, `manifests.py`):** Parses `requirements*.txt`, `pyproject.toml`, `poetry.lock`, and `uv.lock`. Queries **OSV.dev** (or `pip-audit`) for known advisories, computes CVSS v3 base scores, recommends fixed versions, and clearly separates security vulnerabilities from merely outdated packages.
-   - **Configuration & Setup Doctor (`setup_doctor.py`, `envsecrets.py`):** Extracts `os.environ` / `os.getenv` references from AST and compares them against `.env.example`. Checks `.gitignore` coverage for `.env` files without ever reading `.env` contents, and detects hardcoded secrets with automatic value redaction.
-   - **Documentation Drift (`documentation.py`):** Compares `:param:` / Google-style `Args:` docstrings against actual AST function signatures, parses fenced Python blocks in `README.md` / Markdown files to detect broken calls to repository functions, and flags documented env vars missing from code.
-
-2. **Module B — Repository Intelligence Graph (`devpilot/analyzers/repository_graph.py`)**
-   - Builds a static AST graph of modules, classes, functions, HTTP route decorators (`@app.get`, `@app.post`, etc.), and `pytest` test nodes.
-   - Tracks `imports`, `defines`, `calls`, and `routes_to` edges, explicitly labeling heuristic method-name matches as `inferred`.
-
-3. **Module C — Change Impact Analysis (`devpilot/analyzers/change_impact.py`)**
-   - Parses `git diff` (or accepts `--symbol <name>`) to map modified lines to enclosing functions/classes, traverses reverse call and import edges to find affected callers, API endpoints, and relevant tests, and produces an explainable risk level (`Low`, `Medium`, `High`, `Critical`) with concrete evidence.
-
-4. **Module D — AI Developer Assistant (`devpilot/ai/`)**
-   - Integrates **Google Gemini** (`gemini-2.5-flash` by default) through a modular `AIProvider` interface.
-   - Sends only redacted, relevant code snippets framed inside `<untrusted_repository_content>` tags. Never reads or uploads `.env` files.
-   - Every CLI command and dashboard view continues to work when `GEMINI_API_KEY` is unset or AI is disabled.
-
-5. **Module E — Safe AI Fix Engine & Isolated Verifier (`devpilot/fixes/`)**
-   - Generates deterministic fixes (Ruff safe edits, dependency version upgrades, `.env.example` entries) or AI search-and-replace patches.
-   - Displays a unified diff and requires explicit approval before verification or application.
-   - Verifies patches inside an **isolated temporary Git worktree** (or isolated temp copy) using `py_compile`, `ruff`, and targeted `pytest` runs with timeouts. Reports honest verification statuses (`VERIFIED`, `PARTIALLY_VERIFIED`, `FAILED`, `NOT_VERIFIED`).
-
-6. **Module F — Repository Memory (`devpilot/memory/`)**
-   - Persists scan summaries, line-independent finding fingerprints, lifecycle states (`new`, `existing`, `resolved`, `reintroduced`), AI explanations, plans, and patch verification audit logs in `.devpilot/devpilot.db` (SQLite).
-
----
-
-## Installation
-
-### Prerequisites
-- **Python 3.10+** (compatible with Python 3.10, 3.11, 3.12+)
+### 1. Requirements
+- **Python 3.10 or newer**
 - **Git**
-- **Node.js 20+** *(optional — only needed if rebuilding the Next.js static dashboard; the pre-built static bundle is already included in `devpilot/dashboard_server/static/`)*
 
-### Install DevPilot
+*(Node.js is **not** required to use DevPilot or the dashboard — the built dashboard files are already bundled inside the Python package. You only need Node.js if you want to edit the React frontend code.)*
+
+### 2. Install
+
+Clone the repo and install it into a virtual environment:
 
 ```bash
 git clone https://github.com/KrishnaVipul14/DevPilot.git
 cd DevPilot
 
+# Create a virtual environment
 python -m venv .venv
-# Windows PowerShell:
+
+# Activate it (Windows PowerShell)
 .\.venv\Scripts\Activate.ps1
-# macOS / Linux:
+
+# Activate it (macOS / Linux)
 # source .venv/bin/activate
 
+# Install DevPilot
 pip install --upgrade pip setuptools wheel
 pip install -e ".[dev]"
 ```
 
-### Optional: Configure Gemini API Key
+### 3. Scan a project and open the dashboard
 
-Copy `.env.example` or export `GEMINI_API_KEY` in your shell:
+Open **Terminal 1** and run a scan:
+
+```bash
+devpilot init .
+devpilot scan .
+```
+
+Open **Terminal 2** and start the dashboard:
+
+```bash
+devpilot dashboard
+```
+
+Now open **http://127.0.0.1:8765** in your browser. Whenever you run `devpilot scan .` again, the dashboard updates automatically within a couple of seconds.
+
+---
+
+## Setting up AI (Optional)
+
+DevPilot works completely fine **without** an API key. All scanning, dependency checks, impact analysis, history tracking, action plans, and Ruff/manifest auto-fixes work offline.
+
+If you want AI explanations (`devpilot explain`) and AI-generated code patches, set a Google Gemini API key:
 
 ```bash
 # Windows PowerShell
@@ -97,99 +96,124 @@ $env:GEMINI_API_KEY="your-gemini-api-key"
 export GEMINI_API_KEY="your-gemini-api-key"
 ```
 
----
-
-## CLI Usage
-
-```bash
-# 1. Initialize DevPilot configuration (devpilot.yml)
-devpilot init .
-
-# 2. Scan a repository (saves .devpilot/reports/latest.json and updates SQLite memory)
-devpilot scan .
-devpilot scan . --offline          # Skip OSV.dev network calls
-
-# 3. Launch the local dashboard (binds strictly to http://127.0.0.1:8765)
-devpilot dashboard --port 8765
-
-# 4. Inspect scan history and health score trends
-devpilot history
-
-# 5. Analyze Git diff impact or simulate changing a specific function
-devpilot impact
-devpilot impact --symbol validate_token
-
-# 6. Explain a finding (uses Gemini AI if configured, plus deterministic evidence)
-devpilot explain DP001
-
-# 7. Propose a fix diff, verify in an isolated Git worktree, or discard
-devpilot fix DP001
-devpilot verify DP001
-devpilot verify DP001 --apply --yes
-devpilot fix DP001 --discard
-
-# 8. Generate a prioritized improvement plan
-devpilot plan
-
-# 9. View or export the latest report (table, json, markdown)
-devpilot report --format markdown --output report.md
-```
+**Privacy & safety with AI:**
+- DevPilot **never** reads `.env` files or private keys.
+- Any secret-looking string in code is redacted before anything is sent to Gemini.
+- Only the small code snippet around the finding is sent — never your whole repository.
 
 ---
 
-## Try the Included Demo Repository (`examples/demo-app`)
+## All CLI Commands
 
-`examples/demo-app` is a realistic Python billing & authentication service containing intentionally seeded issues across all four analyzer modules:
+| Command | What it does |
+| --- | --- |
+| `devpilot init .` | Creates a `devpilot.yml` config file and sets up `.devpilot/`. |
+| `devpilot scan .` | Scans the repo and saves the report to `.devpilot/reports/latest.json`. Add `--offline` to skip network checks. |
+| `devpilot dashboard` | Starts the local web UI on `http://127.0.0.1:8765`. Add `--open` to launch your browser automatically. |
+| `devpilot impact` | Checks your current `git diff` and shows affected functions, API routes, tests, and risk level. |
+| `devpilot impact --symbol validate_token` | Shows what would be affected if you changed `validate_token()`. |
+| `devpilot explain DP001` | Explains finding `DP001` in detail (uses Gemini AI if `GEMINI_API_KEY` is set). |
+| `devpilot fix DP001` | Generates a proposed fix diff for `DP001` without touching your files. |
+| `devpilot verify DP001` | Tests the proposed patch inside an isolated Git worktree (`py_compile` + `ruff` + `pytest`). Add `--apply` to write it to your files once verified. |
+| `devpilot fix DP001 --discard` | Throws away a proposed patch safely. |
+| `devpilot plan` | Creates a prioritized improvement plan from the latest scan. |
+| `devpilot history` | Shows past scans, health score trends, and patch verification results. |
+| `devpilot report` | Prints or exports the latest report (`--format table`, `json`, or `markdown`). |
+| `devpilot ci .` | Runs in GitHub Actions mode (prints PR annotations and writes a Markdown summary). |
+
+---
+
+## Try the Demo Project (`examples/demo-app`)
+
+We included a small, realistic sample project in `examples/demo-app/` (an auth and billing service) that has real bugs planted in it so you can test every feature right away:
+
+- **Unused imports** (`json` in `auth.py`, `sys` in `billing.py`)
+- **Undefined variable** (`default_discount_rate` in `billing.py` — would crash at runtime)
+- **Vulnerable packages** in `requirements.txt` (`pyyaml==5.3.1`, `urllib3==1.26.4`, `requests==2.25.0`), checked live against **OSV.dev**
+- **Missing `.env.example` variables** (`JWT_ISSUER` and `STRIPE_WEBHOOK_SECRET` are used in code but missing from `.env.example`)
+- **Outdated docs** (`README.md` calls `create_invoice()` with old arguments that no longer exist in `billing.py`)
+- **Connected functions, routes, and tests** (`validate_token()` is called by `require_user()` and `authorize_and_bill()`, used by 3 API routes, and tested in `tests/test_auth_and_billing.py`)
+
+### Run the demo step by step:
 
 ```bash
 cd examples/demo-app
 
-# Run a full scan (including live OSV.dev vulnerability lookup)
+# 1. Scan the demo repo
 devpilot scan .
 
-# Analyze the blast radius of modifying validate_token() in auth.py
+# 2. See what depends on validate_token()
 devpilot impact --symbol validate_token
 
-# Generate a prioritized action plan
+# 3. Get a prioritized action plan
 devpilot plan
 
-# Propose and verify a fix in an isolated worktree
+# 4. Propose and verify a fix in an isolated worktree
 devpilot fix DP001 --verify --yes
 
-# Launch the local web dashboard for demo-app
-devpilot dashboard --port 8765
-```
+# 5. Check the scan & verification history
+devpilot history
 
-Then open **http://127.0.0.1:8765** in your browser to explore:
-- **Overview:** Health score & formula, severity breakdown, analyzer statuses, memory delta, and health trend chart.
-- **Findings:** Search/filter findings, inspect evidence, generate AI explanations, and propose patches.
-- **Code Intelligence:** Interactive module/function relationship explorer and Git / symbol impact simulator.
-- **AI Action Plan:** Prioritized engineering tasks with linked findings and test commands.
-- **Fix Review:** Colored unified diff viewer, isolated worktree verification runner, apply, and discard controls.
-- **Repository Memory:** Historical scan table, health trend line chart, new vs. resolved bar chart, and verification audit log.
+# 6. Open the dashboard for the demo app
+devpilot dashboard
+```
 
 ---
 
-## Rebuilding the Frontend Dashboard
+## What's Inside the Dashboard?
 
-The Next.js static export is pre-built into `devpilot/dashboard_server/static/`. If you modify files under `dashboard/`:
+When you open `http://127.0.0.1:8765`, you get six pages:
 
-```bash
-cd dashboard
-npm install
-npm run build:engine
-```
+1. **Overview** — Your repo's health score (with the exact math formula shown), issue counts by severity, analyzer status, what changed since the last scan, and a health trend chart.
+2. **Findings** — Search and filter every issue by severity, module, or status (`new`, `existing`, `reintroduced`). Click any finding to see the code evidence, ask AI for an explanation, or click **Propose Fix Patch**.
+3. **Code Intelligence** — Browse modules, classes, and functions to see what imports or calls what. Run live **Git Diff Impact** or type any function name to simulate a change and copy the suggested `pytest` command.
+4. **AI Action Plan** — A prioritized checklist grouping related findings into clear tasks, showing why each task matters and which tests to run.
+5. **Fix Review** — View the color-coded unified diff for each proposed patch, click **Approve & Verify in Isolated Worktree** to run checks safely, then **Apply to Working Tree** or **Discard**.
+6. **Repository Memory** — Charts and tables showing your health score over time, new vs. resolved issues per scan, and past verification runs.
 
 ---
 
 ## GitHub Actions Integration
 
-DevPilot includes both a reusable composite action (`action/action.yml`) and a ready-to-run workflow (`.github/workflows/devpilot.yml`) that runs on pull requests with minimal `contents: read` permissions, emits GitHub file/line annotations (`::error`, `::warning`, `::notice`), and writes a Markdown Job Summary with PR change-impact analysis.
+DevPilot runs in CI on pull requests. The workflow in `.github/workflows/devpilot.yml` (and the reusable action in `action/action.yml`):
+
+1. Checks out the PR with read-only permissions (`contents: read`).
+2. Installs DevPilot and runs the analyzers + PR diff impact analysis.
+3. Posts inline annotations (`::error`, `::warning`, `::notice`) directly on the changed files in the GitHub PR view.
+4. Writes a clean Markdown summary table to the GitHub Actions Job Summary.
+
+---
+
+## Project Structure
+
+```text
+DevPilot/
+├── devpilot/
+│   ├── cli/                # Typer CLI commands and terminal tables
+│   ├── core/               # Scanner, config loader, Pydantic models, report writer
+│   ├── analyzers/          # Code health, dependencies (OSV), setup doctor, docs, AST graph, git impact
+│   ├── ai/                 # Gemini client, context builder (with secret redaction), prompts, action plans
+│   ├── fixes/              # Diff generator, isolated Git worktree verifier, safe patch applier
+│   ├── memory/             # SQLite database and stable finding fingerprints
+│   ├── dashboard_server/   # Local 127.0.0.1 HTTP server + pre-built static dashboard
+│   ├── integrations/       # GitHub Actions annotations and job summary formatter
+│   └── utils/              # Safe subprocess runner (with timeouts) and Git helpers
+├── dashboard/              # Next.js + TypeScript + Tailwind + Recharts frontend source
+├── examples/demo-app/      # Sample Python project with seeded issues for testing
+├── action/action.yml       # Reusable GitHub Action
+├── .github/workflows/      # CI workflow
+├── docs/api.md             # Local JSON API documentation
+├── tests/                  # Automated pytest suite
+├── devpilot.yml            # Default configuration
+└── pyproject.toml          # Python package setup
+```
 
 ---
 
 ## Honest Limitations
 
-- **Static Analysis Scope:** Static AST and linter analysis cannot detect every runtime defect, dynamic import, reflection call, or business-logic flaw. Edges matched by method name alone are explicitly marked `inferred`.
-- **Dependency Auditing:** Precise vulnerability matching requires pinned versions (`==`) or lock files (`poetry.lock`, `uv.lock`) and advisory coverage in OSV.dev.
-- **AI Assistance:** AI explanations and AI-generated patches are non-deterministic and clearly labeled in both the CLI and Dashboard. A proposed patch is never marked `VERIFIED` unless static checks and relevant tests pass in an isolated workspace.
+We built DevPilot to be genuinely useful, which means being upfront about what static tools and LLMs can and cannot do:
+
+- **Static analysis can't catch everything:** Ruff and Python AST parsing are great at catching syntax errors, undefined names, unused imports, and structural issues, but they cannot prove your business logic is right or follow dynamic runtime tricks (`getattr`, monkey-patching, reflection). When a call relationship is guessed by method name alone, DevPilot labels it `inferred`.
+- **Dependency checks need pinned versions:** To check a package against OSV.dev, DevPilot needs an exact version (like `requests==2.25.0` or a lockfile). Unpinned ranges like `requests>=2.0` are flagged as informational so you know they weren't audited.
+- **AI suggestions are never trusted blindly:** Any explanation or patch created by AI is clearly badged as `AI-generated`. DevPilot never touches your working tree automatically, and a patch is only marked `VERIFIED` after syntax checks, Ruff, and `pytest` pass inside an isolated workspace.

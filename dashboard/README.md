@@ -1,36 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DevPilot Dashboard (Frontend Source)
 
-## Getting Started
+This folder contains the Next.js + TypeScript + Tailwind CSS source code for the local DevPilot web dashboard.
 
-First, run the development server:
+> **Note:** You do **not** need to build or run this manually just to use DevPilot. A production static build is already copied into `../devpilot/dashboard_server/static/` and served automatically when you run `devpilot dashboard`.
+
+---
+
+## Developing the Dashboard Locally
+
+If you want to edit the UI components or pages:
+
+### 1. Install dependencies
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd dashboard
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Run in development mode
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Start the Python backend in one terminal (from the repository you scanned):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+devpilot dashboard --port 8765
+```
 
-## Learn More
+Then start the Next.js dev server in a second terminal pointed at that local API:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+# Windows PowerShell
+$env:NEXT_PUBLIC_DEVPILOT_API="http://127.0.0.1:8765"
+npm run dev
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# macOS / Linux
+NEXT_PUBLIC_DEVPILOT_API="http://127.0.0.1:8765" npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Open **http://localhost:3000** in your browser.
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Rebuilding for the Python Package
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+When you finish making changes to the frontend, run:
+
+```bash
+npm run build:engine
+```
+
+This runs `next build` (static export to `dashboard/out/`) and copies the generated static files straight into `../devpilot/dashboard_server/static/` so `devpilot dashboard` serves your updated UI.
