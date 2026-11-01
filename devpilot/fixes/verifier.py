@@ -115,7 +115,17 @@ def _check_ruff_static(ctx: RepoContext, ws: Path, py_files: list[str]) -> dict[
     if not ruff:
         return None
     select = ",".join(ctx.config.analyzers.code_health.select)
-    json_cmd = [ruff, "check", "--no-cache", "--output-format", "json", "--exit-zero", "--select", select, *py_files]
+    json_cmd = [
+        ruff,
+        "check",
+        "--no-cache",
+        "--output-format",
+        "json",
+        "--exit-zero",
+        "--select",
+        select,
+        *py_files,
+    ]
     base_res = run(json_cmd, cwd=ctx.root, timeout=60)
     new_res = run(json_cmd, cwd=ws, timeout=60)
     cmd = [ruff, "check", "--no-cache", "--select", select, *py_files]
@@ -127,7 +137,9 @@ def _check_ruff_static(ctx: RepoContext, ws: Path, py_files: list[str]) -> dict[
             base_list = json.loads(base_res.stdout or "[]")
             new_list = json.loads(new_res.stdout or "[]")
             base_keys = {(x.get("code"), x.get("message")) for x in base_list}
-            if len(new_list) < len(base_list) and all((x.get("code"), x.get("message")) in base_keys for x in new_list):
+            if len(new_list) < len(base_list) and all(
+                (x.get("code"), x.get("message")) in base_keys for x in new_list
+            ):
                 passed = True
                 detail = f"Resolved {len(base_list) - len(new_list)} violation(s); {len(new_list)} pre-existing unrelated issue(s) remain."
         except Exception:  # noqa: BLE001
@@ -146,13 +158,15 @@ def _check_non_py_files(ws: Path, non_py: list[str]) -> list[dict[str, Any]]:
     for rel in non_py:
         text = (ws / rel).read_text(encoding="utf-8")
         ok = bool(text.strip())
-        checks.append({
-            "name": f"validate_{rel}",
-            "status": "passed" if ok else "failed",
-            "detail": f"Validated updated {rel} ({len(text.splitlines())} lines).",
-            "command": None,
-            "duration_ms": 1,
-        })
+        checks.append(
+            {
+                "name": f"validate_{rel}",
+                "status": "passed" if ok else "failed",
+                "detail": f"Validated updated {rel} ({len(text.splitlines())} lines).",
+                "command": None,
+                "duration_ms": 1,
+            }
+        )
     return checks
 
 

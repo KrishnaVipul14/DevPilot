@@ -104,7 +104,9 @@ class DependencyAnalyzer(Analyzer):
             try:
                 vuln_ids = dict(zip(unique, query_batch(unique, timeout=cfg.timeout), strict=False))
             except OSVError as exc:
-                raise RuntimeError(f"Could not reach OSV.dev ({exc}). Re-run later or use --offline.") from exc
+                raise RuntimeError(
+                    f"Could not reach OSV.dev ({exc}). Re-run later or use --offline."
+                ) from exc
         all_ids = [vid for ids in vuln_ids.values() for vid in ids]
         details = get_vulns(all_ids, timeout=cfg.timeout) if all_ids else {}
         for dep in pinned:
@@ -112,7 +114,9 @@ class DependencyAnalyzer(Analyzer):
                 self._vuln_finding(dep, vuln, out)
         if cfg.check_outdated:
             self._outdated(pinned, out, cfg.timeout)
-        out.message = f"{len(deps)} dependencies parsed, {len(unique)} pinned versions audited via {cfg.engine}"
+        out.message = (
+            f"{len(deps)} dependencies parsed, {len(unique)} pinned versions audited via {cfg.engine}"
+        )
         return out
 
     def _unpinned(self, deps: list[Dependency], out: AnalyzerOutput) -> None:
@@ -124,14 +128,21 @@ class DependencyAnalyzer(Analyzer):
             if manifest.endswith("pyproject.toml"):
                 continue  # ranges are normal for libraries
             names = ", ".join(sorted({d.name for d in items})[:12])
-            out.add(Finding(
-                module=self.name, rule="unpinned-dependencies", severity=Severity.INFO,
-                title=f"{len(items)} unpinned dependencies cannot be audited precisely",
-                file=manifest, line=items[0].line,
-                evidence=f"No exact version (==) for: {names}",
-                suggestion="Pin exact versions (or add a lock file) so installs are reproducible and auditable.",
-                confidence=Confidence.HIGH, metadata={"packages": sorted({d.name for d in items})},
-            ), anchor="unpinned")
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="unpinned-dependencies",
+                    severity=Severity.INFO,
+                    title=f"{len(items)} unpinned dependencies cannot be audited precisely",
+                    file=manifest,
+                    line=items[0].line,
+                    evidence=f"No exact version (==) for: {names}",
+                    suggestion="Pin exact versions (or add a lock file) so installs are reproducible and auditable.",
+                    confidence=Confidence.HIGH,
+                    metadata={"packages": sorted({d.name for d in items})},
+                ),
+                anchor="unpinned",
+            )
 
     def _vuln_finding(self, dep: Dependency, vuln: dict, out: AnalyzerOutput) -> None:
         severity, sev_source, confidence = vuln_severity(vuln)
@@ -140,20 +151,39 @@ class DependencyAnalyzer(Analyzer):
         cves = [i for i in ids if i.startswith("CVE-")]
         fixes = fixed_versions(vuln, dep.name)
         summary = (vuln.get("summary") or (vuln.get("details") or "").split("\n")[0])[:240]
-        upgrade = f"Upgrade {dep.name} to {fixes[0]} or later" if fixes else "No fixed version published; consider an alternative package or mitigation"
-        out.add(Finding(
-            module=self.name, rule="vulnerable-dependency", severity=severity,
-            title=f"{dep.name} {dep.version} has a known vulnerability ({primary})",
-            file=dep.manifest, line=dep.line,
-            evidence=(f"{dep.name}=={dep.version}: {summary or 'see advisory'}\n"
-                      f"Advisory: {', '.join(ids)} ({sev_source})"),
-            suggestion=upgrade + ".",
-            confidence=confidence,
-            fixable=bool(fixes and "requirements" in dep.manifest.lower()),
-            references=[f"https://osv.dev/vulnerability/{primary}"],
-            metadata={"package": dep.name, "installed_version": dep.version, "advisory": primary,
-                      "aliases": ids, "cves": cves, "fixed_versions": fixes, "severity_source": sev_source},
-        ), anchor=f"{dep.name}@{dep.version}:{primary}")
+        upgrade = (
+            f"Upgrade {dep.name} to {fixes[0]} or later"
+            if fixes
+            else "No fixed version published; consider an alternative package or mitigation"
+        )
+        out.add(
+            Finding(
+                module=self.name,
+                rule="vulnerable-dependency",
+                severity=severity,
+                title=f"{dep.name} {dep.version} has a known vulnerability ({primary})",
+                file=dep.manifest,
+                line=dep.line,
+                evidence=(
+                    f"{dep.name}=={dep.version}: {summary or 'see advisory'}\n"
+                    f"Advisory: {', '.join(ids)} ({sev_source})"
+                ),
+                suggestion=upgrade + ".",
+                confidence=confidence,
+                fixable=bool(fixes and "requirements" in dep.manifest.lower()),
+                references=[f"https://osv.dev/vulnerability/{primary}"],
+                metadata={
+                    "package": dep.name,
+                    "installed_version": dep.version,
+                    "advisory": primary,
+                    "aliases": ids,
+                    "cves": cves,
+                    "fixed_versions": fixes,
+                    "severity_source": sev_source,
+                },
+            ),
+            anchor=f"{dep.name}@{dep.version}:{primary}",
+        )
 
     def _pip_audit_ids(self, ctx: RepoContext, unique: list[tuple[str, str]], timeout: float) -> dict:
         import tempfile
@@ -161,8 +191,23 @@ class DependencyAnalyzer(Analyzer):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
             fh.write("\n".join(f"{n}=={v}" for n, v in unique))
             req = fh.name
-        res = run([sys.executable, "-m", "pip_audit", "-r", req, "--no-deps", "--disable-pip",
-                   "--format", "json", "--progress-spinner", "off"], cwd=ctx.root, timeout=max(timeout, 120))
+        res = run(
+            [
+                sys.executable,
+                "-m",
+                "pip_audit",
+                "-r",
+                req,
+                "--no-deps",
+                "--disable-pip",
+                "--format",
+                "json",
+                "--progress-spinner",
+                "off",
+            ],
+            cwd=ctx.root,
+            timeout=max(timeout, 120),
+        )
         if res.returncode == 127 or "No module named pip_audit" in res.stderr:
             raise AnalyzerSkipped("pip-audit is not installed (pip install 'devpilot[audit]')")
         try:
@@ -177,7 +222,9 @@ class DependencyAnalyzer(Analyzer):
 
     def _outdated(self, pinned: list[Dependency], out: AnalyzerOutput, timeout: float) -> None:
         def latest(name: str) -> tuple[str, str | None]:
-            req = urllib.request.Request(f"https://pypi.org/pypi/{name}/json", headers={"User-Agent": "devpilot"})
+            req = urllib.request.Request(
+                f"https://pypi.org/pypi/{name}/json", headers={"User-Agent": "devpilot"}
+            )
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     return name, json.loads(resp.read())["info"]["version"]
@@ -191,11 +238,18 @@ class DependencyAnalyzer(Analyzer):
             newest = latest_versions.get(dep.name)
             cur, new = _version_tuple(dep.version or ""), _version_tuple(newest or "")
             if cur and new and new > cur:
-                out.add(Finding(
-                    module=self.name, rule="outdated-dependency", severity=Severity.INFO,
-                    title=f"{dep.name} {dep.version} is outdated (latest {newest})",
-                    file=dep.manifest, line=dep.line,
-                    evidence=f"PyPI reports {newest} as the latest release. Outdated is not the same as vulnerable.",
-                    suggestion=f"Consider upgrading {dep.name} after reviewing its changelog.",
-                    confidence=Confidence.HIGH, metadata={"package": dep.name, "latest": newest},
-                ), anchor=f"{dep.name}@{dep.version}")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="outdated-dependency",
+                        severity=Severity.INFO,
+                        title=f"{dep.name} {dep.version} is outdated (latest {newest})",
+                        file=dep.manifest,
+                        line=dep.line,
+                        evidence=f"PyPI reports {newest} as the latest release. Outdated is not the same as vulnerable.",
+                        suggestion=f"Consider upgrading {dep.name} after reviewing its changelog.",
+                        confidence=Confidence.HIGH,
+                        metadata={"package": dep.name, "latest": newest},
+                    ),
+                    anchor=f"{dep.name}@{dep.version}",
+                )

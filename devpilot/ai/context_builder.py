@@ -47,7 +47,11 @@ def build_finding_context(
                 "callers": first["callers"][:10],
                 "dependent_modules": first["dependent_modules"][:10],
                 "routes": first["routes"][:5],
-                "tests": [t.get("nodeid", "") for t in first["tests"][:10] if isinstance(t, dict) and t.get("nodeid")],
+                "tests": [
+                    t.get("nodeid", "")
+                    for t in first["tests"][:10]
+                    if isinstance(t, dict) and t.get("nodeid")
+                ],
                 "risk": first["risk"],
             }
 

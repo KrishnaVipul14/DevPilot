@@ -58,12 +58,14 @@ def format_markdown_summary(report: Report, impact: dict[str, Any] | None = None
 
     if impact and impact.get("changed_files"):
         risk = impact.get("overall_risk", {})
-        lines.extend([
-            "### Change Impact Analysis",
-            f"- **Estimated Risk:** `{str(risk.get('level', 'low')).upper()}`",
-            f"- **Modified Files:** `{len(impact['changed_files'])}`",
-            f"- **Modified Symbols:** `{len(impact.get('changed_symbols', []))}`",
-        ])
+        lines.extend(
+            [
+                "### Change Impact Analysis",
+                f"- **Estimated Risk:** `{str(risk.get('level', 'low')).upper()}`",
+                f"- **Modified Files:** `{len(impact['changed_files'])}`",
+                f"- **Modified Symbols:** `{len(impact.get('changed_symbols', []))}`",
+            ]
+        )
         for reason in risk.get("reasons", []):
             lines.append(f"  - {reason}")
         if impact.get("suggested_commands"):
@@ -71,12 +73,14 @@ def format_markdown_summary(report: Report, impact: dict[str, Any] | None = None
         lines.append("")
 
     if report.findings:
-        lines.extend([
-            "### Top Findings",
-            "",
-            "| ID | Severity | Module | Location | Title | Suggestion |",
-            "| --- | --- | --- | --- | --- | --- |",
-        ])
+        lines.extend(
+            [
+                "### Top Findings",
+                "",
+                "| ID | Severity | Module | Location | Title | Suggestion |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
         for f in report.findings[:25]:
             loc = f"`{f.file}:{f.line}`" if (f.file and f.line) else (f"`{f.file}`" if f.file else "—")
             lines.append(

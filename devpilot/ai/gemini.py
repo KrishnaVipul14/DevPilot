@@ -18,24 +18,35 @@ from typing import Any
 from devpilot.ai.provider import AIProvider, AIProviderError, AIStatus, is_ai_disabled
 from devpilot.core.config import DevPilotConfig
 
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 FALLBACK_MODELS = [
+    "gemini-flash-lite-latest",
+    "gemini-3.6-flash",
+    "gemini-flash-latest",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-pro",
+    "gemini-pro-latest",
 ]
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_ENV_LINE_RE = re.compile(r"^\s*(?:export\s+)?(GEMINI_API_KEY|GOOGLE_API_KEY|DEVPILOT_GEMINI_MODEL)\s*=\s*(.*?)\s*$")
+_ENV_LINE_RE = re.compile(
+    r"^\s*(?:export\s+)?(GEMINI_API_KEY|GOOGLE_API_KEY|DEVPILOT_GEMINI_MODEL)\s*=\s*(.*?)\s*$"
+)
 
 
-def _read_dotenv_vars() -> dict[str, str]:
+def _read_dotenv_vars(root: Path | None = None) -> dict[str, str]:
     """Read only GEMINI_API_KEY / GOOGLE_API_KEY / DEVPILOT_GEMINI_MODEL from a local `.env` if not in os.environ."""
     found: dict[str, str] = {}
-    for candidate in (Path.cwd() / ".env", Path.cwd().parent / ".env", Path.cwd().parent.parent / ".env"):
+    candidates = [
+        Path.cwd() / ".env",
+        Path.cwd().parent / ".env",
+        Path.cwd().parent.parent / ".env",
+    ]
+    if root is not None:
+        candidates.insert(0, root / ".env")
+        candidates.insert(1, root.parent / ".env")
+    for candidate in candidates:
         if not candidate.is_file():
             continue
         try:
@@ -82,13 +93,19 @@ class GeminiProvider(AIProvider):
 
     def __init__(self, config: DevPilotConfig) -> None:
         self.config = config
-        dotenv = _read_dotenv_vars()
+        extra_root = getattr(config, "root", None)
+        dotenv = _read_dotenv_vars(extra_root)
         raw_model = (
             config.ai.model
             or os.environ.get("DEVPILOT_GEMINI_MODEL", "").strip()
             or dotenv.get("DEVPILOT_GEMINI_MODEL", "").strip()
             or DEFAULT_GEMINI_MODEL
         )
+        norm_raw = raw_model.strip().lower()
+        if any(
+            k in norm_raw for k in ("llama", "mixtral", "gemma", "openai", "gpt", "qwen", "deepseek")
+        ) or norm_raw in ("gemini-pro", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"):
+            raw_model = DEFAULT_GEMINI_MODEL
         self.model = _normalize_model_name(raw_model)
         self._dotenv = dotenv
 
@@ -109,7 +126,7 @@ class GeminiProvider(AIProvider):
                 available=False,
                 provider=self.name,
                 model=self.model,
-                reason="GEMINI_API_KEY environment variable is not set",
+                reason="GEMINI_API_KEY is not set (add it in .env or via Web Settings)",
             )
         return AIStatus(available=True, provider=self.name, model=self.model, reason="Ready")
 
@@ -128,7 +145,12 @@ class GeminiProvider(AIProvider):
         for m in data.get("models") or []:
             methods = m.get("supportedGenerationMethods") or []
             name = _normalize_model_name(str(m.get("name") or ""))
-            if "generateContent" in methods and "gemini" in name and "vision" not in name and "embedding" not in name:
+            if (
+                "generateContent" in methods
+                and "gemini" in name
+                and "vision" not in name
+                and "embedding" not in name
+            ):
                 return name
         return None
 
@@ -182,7 +204,9 @@ class GeminiProvider(AIProvider):
                     last_404_detail = err_body or f"model '{candidate}' not found"
                     continue
                 if exc.code == 429:
-                    raise AIProviderError("Gemini API rate limit exceeded (HTTP 429). Please retry shortly.") from exc
+                    raise AIProviderError(
+                        "Gemini API rate limit exceeded (HTTP 429). Please retry shortly."
+                    ) from exc
                 detail = f" ({err_body})" if err_body else ""
                 raise AIProviderError(f"Gemini API HTTP {exc.code}: {exc.reason}{detail}") from exc
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:

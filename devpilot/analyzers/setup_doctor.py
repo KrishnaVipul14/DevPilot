@@ -24,15 +24,62 @@ from devpilot.core.context import ENV_EXAMPLE_NAMES, RepoContext, is_sensitive_f
 from devpilot.core.models import Confidence, Finding, Severity
 from devpilot.utils import git as gitutil
 
-TEXT_SUFFIXES = (".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg",
-                 ".sh", ".ps1", ".md", ".txt", ".env.example", ".go", ".rb", ".java", ".php", ".tf")
+TEXT_SUFFIXES = (
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".sh",
+    ".ps1",
+    ".md",
+    ".txt",
+    ".env.example",
+    ".go",
+    ".rb",
+    ".java",
+    ".php",
+    ".tf",
+)
 LOCK_FILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock")
 # Variables commonly provided by the platform; not expected in .env.example.
-PLATFORM_VARS = {"PATH", "HOME", "USER", "PWD", "SHELL", "TERM", "LANG", "TMPDIR", "TEMP", "TMP", "CI",
-                 "GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT", "GITHUB_WORKSPACE", "GITHUB_BASE_REF",
-                 "GITHUB_SHA", "GITHUB_REF", "GITHUB_EVENT_PATH", "VIRTUAL_ENV", "PYTHONPATH", "APPDATA",
-                 "LOCALAPPDATA", "USERPROFILE", "SYSTEMROOT", "COMSPEC", "PYTHONIOENCODING", "NO_COLOR",
-                 "PYTEST_CURRENT_TEST"}
+PLATFORM_VARS = {
+    "PATH",
+    "HOME",
+    "USER",
+    "PWD",
+    "SHELL",
+    "TERM",
+    "LANG",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "CI",
+    "GITHUB_ACTIONS",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_OUTPUT",
+    "GITHUB_WORKSPACE",
+    "GITHUB_BASE_REF",
+    "GITHUB_SHA",
+    "GITHUB_REF",
+    "GITHUB_EVENT_PATH",
+    "VIRTUAL_ENV",
+    "PYTHONPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PYTHONIOENCODING",
+    "NO_COLOR",
+    "PYTEST_CURRENT_TEST",
+}
 
 
 class SetupDoctorAnalyzer(Analyzer):
@@ -69,15 +116,25 @@ class SetupDoctorAnalyzer(Analyzer):
             if by_name:
                 required = sorted(n for n, us in by_name.items() if not all(u.has_default for u in us))
                 first = min(usages, key=lambda u: (u.file, u.line))
-                out.add(Finding(
-                    module=self.name, rule="env-example-missing", severity=Severity.MEDIUM,
-                    title="Environment variables are used but no .env.example exists",
-                    file=first.file, line=first.line,
-                    evidence=(f"{len(by_name)} variables referenced in code ({', '.join(sorted(by_name)[:10])}); "
-                              f"{len(required)} have no default."),
-                    suggestion="Add a .env.example listing every variable with a placeholder value and document it in the README.",
-                    confidence=Confidence.HIGH, fixable=True, metadata={"variables": sorted(by_name), "required": required},
-                ), anchor="env-example-missing")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="env-example-missing",
+                        severity=Severity.MEDIUM,
+                        title="Environment variables are used but no .env.example exists",
+                        file=first.file,
+                        line=first.line,
+                        evidence=(
+                            f"{len(by_name)} variables referenced in code ({', '.join(sorted(by_name)[:10])}); "
+                            f"{len(required)} have no default."
+                        ),
+                        suggestion="Add a .env.example listing every variable with a placeholder value and document it in the README.",
+                        confidence=Confidence.HIGH,
+                        fixable=True,
+                        metadata={"variables": sorted(by_name), "required": required},
+                    ),
+                    anchor="env-example-missing",
+                )
             return
         example = examples[0]
         keys = parse_env_keys(ctx.read_text(example) or "")
@@ -86,27 +143,43 @@ class SetupDoctorAnalyzer(Analyzer):
                 continue
             required = not all(u.has_default for u in us)
             u = us[0]
-            out.add(Finding(
-                module=self.name, rule="env-missing-from-example",
-                severity=Severity.MEDIUM if required else Severity.LOW,
-                title=f"{name} is used in code but missing from {example}",
-                file=u.file, line=u.line,
-                evidence=(f"`{name}` is read at {', '.join(f'{x.file}:{x.line}' for x in us[:3])}"
-                          f"{' without a default value' if required else ' (has a default)'}; not listed in {example}."),
-                suggestion=f"Add `{name}=` with a placeholder value to {example} and document its purpose.",
-                confidence=Confidence.HIGH, fixable=True, metadata={"variable": name, "required": required, "example_file": example},
-            ), anchor=f"env:{name}")
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="env-missing-from-example",
+                    severity=Severity.MEDIUM if required else Severity.LOW,
+                    title=f"{name} is used in code but missing from {example}",
+                    file=u.file,
+                    line=u.line,
+                    evidence=(
+                        f"`{name}` is read at {', '.join(f'{x.file}:{x.line}' for x in us[:3])}"
+                        f"{' without a default value' if required else ' (has a default)'}; not listed in {example}."
+                    ),
+                    suggestion=f"Add `{name}=` with a placeholder value to {example} and document its purpose.",
+                    confidence=Confidence.HIGH,
+                    fixable=True,
+                    metadata={"variable": name, "required": required, "example_file": example},
+                ),
+                anchor=f"env:{name}",
+            )
         used = set(by_name)
         for name, line in keys.items():
             if name not in used:
-                out.add(Finding(
-                    module=self.name, rule="env-unused-in-code", severity=Severity.INFO,
-                    title=f"{name} is documented in {example} but not referenced in Python code",
-                    file=example, line=line,
-                    evidence=f"No os.environ/os.getenv reference to `{name}` was found in analyzed Python files.",
-                    suggestion="Remove the stale variable, or ignore this if it is consumed by tooling outside Python.",
-                    confidence=Confidence.MEDIUM, metadata={"variable": name},
-                ), anchor=f"env-unused:{name}")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="env-unused-in-code",
+                        severity=Severity.INFO,
+                        title=f"{name} is documented in {example} but not referenced in Python code",
+                        file=example,
+                        line=line,
+                        evidence=f"No os.environ/os.getenv reference to `{name}` was found in analyzed Python files.",
+                        suggestion="Remove the stale variable, or ignore this if it is consumed by tooling outside Python.",
+                        confidence=Confidence.MEDIUM,
+                        metadata={"variable": name},
+                    ),
+                    anchor=f"env-unused:{name}",
+                )
 
     def _check_env_files(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
         # Never open .env files - only check presence, git tracking and ignore status.
@@ -124,21 +197,33 @@ class SetupDoctorAnalyzer(Analyzer):
             except ValueError:
                 rel = path.name
             if tracked is not None and self._tracked(ctx, rel, tracked):
-                out.add(Finding(
-                    module=self.name, rule="env-file-committed", severity=Severity.CRITICAL,
-                    title=f"{rel} is committed to git", file=rel,
-                    evidence=f"`{rel}` is tracked by git. Environment files typically contain credentials. Contents were not read.",
-                    suggestion=f"Run `git rm --cached {rel}`, add it to .gitignore and rotate any credentials it contained.",
-                    confidence=Confidence.HIGH,
-                ), anchor=f"committed:{rel}")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="env-file-committed",
+                        severity=Severity.CRITICAL,
+                        title=f"{rel} is committed to git",
+                        file=rel,
+                        evidence=f"`{rel}` is tracked by git. Environment files typically contain credentials. Contents were not read.",
+                        suggestion=f"Run `git rm --cached {rel}`, add it to .gitignore and rotate any credentials it contained.",
+                        confidence=Confidence.HIGH,
+                    ),
+                    anchor=f"committed:{rel}",
+                )
             elif ctx.git_root and not gitutil.is_ignored(ctx.root, rel):
-                out.add(Finding(
-                    module=self.name, rule="env-file-not-ignored", severity=Severity.HIGH,
-                    title=f"{rel} is not covered by .gitignore", file=rel,
-                    evidence=f"`{rel}` exists and is not ignored, so it could be committed accidentally.",
-                    suggestion=f"Add `{rel}` (or `.env*` with `!.env.example`) to .gitignore.",
-                    confidence=Confidence.HIGH,
-                ), anchor=f"not-ignored:{rel}")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="env-file-not-ignored",
+                        severity=Severity.HIGH,
+                        title=f"{rel} is not covered by .gitignore",
+                        file=rel,
+                        evidence=f"`{rel}` exists and is not ignored, so it could be committed accidentally.",
+                        suggestion=f"Add `{rel}` (or `.env*` with `!.env.example`) to .gitignore.",
+                        confidence=Confidence.HIGH,
+                    ),
+                    anchor=f"not-ignored:{rel}",
+                )
 
     @staticmethod
     def _tracked(ctx: RepoContext, rel: str, tracked: set[str]) -> bool:
@@ -164,31 +249,50 @@ class SetupDoctorAnalyzer(Analyzer):
             for hit in hits:
                 label = f"`{hit.name}`" if hit.name else hit.kind
                 confidence = Confidence.LOW if in_tests else Confidence(hit.confidence)
-                out.add(Finding(
-                    module=self.name, rule="hardcoded-secret",
-                    severity=Severity.MEDIUM if in_tests else Severity.HIGH,
-                    title=f"Possible hardcoded secret ({hit.kind})", file=rel, line=hit.line,
-                    evidence=f"{label} appears to contain a literal secret (value redacted, {hit.length} characters).",
-                    suggestion="Move the value to an environment variable / secret manager, and rotate it if it was ever committed.",
-                    confidence=confidence, metadata={"kind": hit.kind, "name": hit.name},
-                ), anchor=f"{hit.kind}:{hit.name or ''}:{hit.length}")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="hardcoded-secret",
+                        severity=Severity.MEDIUM if in_tests else Severity.HIGH,
+                        title=f"Possible hardcoded secret ({hit.kind})",
+                        file=rel,
+                        line=hit.line,
+                        evidence=f"{label} appears to contain a literal secret (value redacted, {hit.length} characters).",
+                        suggestion="Move the value to an environment variable / secret manager, and rotate it if it was ever committed.",
+                        confidence=confidence,
+                        metadata={"kind": hit.kind, "name": hit.name},
+                    ),
+                    anchor=f"{hit.kind}:{hit.name or ''}:{hit.length}",
+                )
 
     def _check_readme(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
         readmes = [f for f in ctx.files if "/" not in f and f.lower().startswith("readme")]
         if not readmes:
-            out.add(Finding(
-                module=self.name, rule="readme-missing", severity=Severity.LOW,
-                title="No README found", evidence="The repository root has no README file.",
-                suggestion="Add a README describing purpose, installation, configuration and usage.",
-                confidence=Confidence.HIGH,
-            ), anchor="readme-missing")
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="readme-missing",
+                    severity=Severity.LOW,
+                    title="No README found",
+                    evidence="The repository root has no README file.",
+                    suggestion="Add a README describing purpose, installation, configuration and usage.",
+                    confidence=Confidence.HIGH,
+                ),
+                anchor="readme-missing",
+            )
             return
         text = (ctx.read_text(readmes[0]) or "").lower()
         if not re.search(r"\b(install|setup|set up|getting started|quick ?start)\b", text):
-            out.add(Finding(
-                module=self.name, rule="setup-instructions-missing", severity=Severity.LOW,
-                title="README has no setup/installation instructions", file=readmes[0],
-                evidence="No installation, setup or getting-started section was found in the README.",
-                suggestion="Document how to install dependencies, configure environment variables and run the project.",
-                confidence=Confidence.MEDIUM,
-            ), anchor="setup-missing")
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="setup-instructions-missing",
+                    severity=Severity.LOW,
+                    title="README has no setup/installation instructions",
+                    file=readmes[0],
+                    evidence="No installation, setup or getting-started section was found in the README.",
+                    suggestion="Document how to install dependencies, configure environment variables and run the project.",
+                    confidence=Confidence.MEDIUM,
+                ),
+                anchor="setup-missing",
+            )

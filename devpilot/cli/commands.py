@@ -67,7 +67,12 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def main_callback(
     version: bool | None = typer.Option(
-        None, "--version", "-V", callback=_version_callback, is_eager=True, help="Show DevPilot version and exit."
+        None,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show DevPilot version and exit.",
     ),
 ) -> None:
     """DevPilot CLI."""
@@ -186,7 +191,10 @@ def cmd_impact(
     path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
     base: str = typer.Option("HEAD", "--base", "-b", help="Git ref to diff against."),
     symbol: str | None = typer.Option(
-        None, "--symbol", "-s", help="Analyze impact of changing a specific function or class (e.g. validate_token)."
+        None,
+        "--symbol",
+        "-s",
+        help="Analyze impact of changing a specific function or class (e.g. validate_token).",
     ),
     json_out: bool = typer.Option(False, "--json", help="Output impact report as JSON."),
 ) -> None:
@@ -249,7 +257,9 @@ def cmd_explain(
 
     print_finding_detail(finding, exp=exp)
     if ai_err:
-        console.print(f"[yellow]Note: AI explanation unavailable ({ai_err}). Displayed deterministic finding details above.[/yellow]")
+        console.print(
+            f"[yellow]Note: AI explanation unavailable ({ai_err}). Displayed deterministic finding details above.[/yellow]"
+        )
 
 
 def _handle_fix_discard(ctx: RepoContext, finding_id: str) -> None:
@@ -287,7 +297,9 @@ def _handle_fix_application(
             f"Apply verified patch {patch['patch_id']} to your working tree?", default=False
         )
         if not approved_apply:
-            console.print("[yellow]Patch was verified in isolation but NOT applied to the working tree.[/yellow]")
+            console.print(
+                "[yellow]Patch was verified in isolation but NOT applied to the working tree.[/yellow]"
+            )
             return None
     return apply_patch(ctx, patch["patch_id"])
 
@@ -303,8 +315,12 @@ def cmd_fix(
     apply_now: bool = typer.Option(
         False, "--apply", help="Apply the verified patch to the working tree after approval."
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Approve verification/application without interactive prompt."),
-    discard: bool = typer.Option(False, "--discard", help="Discard an existing proposed patch for this finding."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Approve verification/application without interactive prompt."
+    ),
+    discard: bool = typer.Option(
+        False, "--discard", help="Discard an existing proposed patch for this finding."
+    ),
     json_out: bool = typer.Option(False, "--json", help="Output patch as JSON."),
 ) -> None:
     """Propose a safe fix patch for a finding and preview the unified diff."""
@@ -410,7 +426,9 @@ def cmd_verify(
 @app.command("plan")
 def cmd_plan(
     path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
-    deterministic: bool = typer.Option(False, "--deterministic", help="Use deterministic prioritization without AI."),
+    deterministic: bool = typer.Option(
+        False, "--deterministic", help="Use deterministic prioritization without AI."
+    ),
     json_out: bool = typer.Option(False, "--json", help="Output plan as JSON."),
 ) -> None:
     """Generate a prioritized engineering improvement plan from the latest scan."""
@@ -465,7 +483,9 @@ def cmd_ci(
     path: Path = typer.Argument(Path("."), help="Repository path."),
     base: str = typer.Option("HEAD~1", "--base", help="Base Git ref for PR impact analysis."),
     offline: bool = typer.Option(False, "--offline", help="Skip network-dependent checks."),
-    fail_on: str = typer.Option("critical", "--fail-on", help="Fail workflow on severity (critical, high, medium, low, none)."),
+    fail_on: str = typer.Option(
+        "critical", "--fail-on", help="Fail workflow on severity (critical, high, medium, low, none)."
+    ),
 ) -> None:
     """Run DevPilot in CI / GitHub Actions mode: emit annotations and write a Job Summary."""
     root = path.resolve()

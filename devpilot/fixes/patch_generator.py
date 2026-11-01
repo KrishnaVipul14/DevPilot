@@ -154,7 +154,9 @@ def _try_ai_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str]
     provider = get_ai_provider(ctx.config)
     st = provider.status()
     if not st.available:
-        raise PatchError(f"No deterministic fix available for `{finding.rule}` and AI is unavailable ({st.reason}).")
+        raise PatchError(
+            f"No deterministic fix available for `{finding.rule}` and AI is unavailable ({st.reason})."
+        )
 
     context = build_finding_context(ctx, finding)
     try:
@@ -192,7 +194,9 @@ def _try_ai_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str]
         try:
             ast.parse(updated, filename=finding.file)
         except SyntaxError as exc:
-            raise PatchError(f"Rejected AI patch because it introduced a Python syntax error: {exc.msg}") from exc
+            raise PatchError(
+                f"Rejected AI patch because it introduced a Python syntax error: {exc.msg}"
+            ) from exc
 
     summary = str(raw.get("summary") or f"AI proposed fix for {finding.id} ({finding.title})")
     return finding.file, orig, updated, summary

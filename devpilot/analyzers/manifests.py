@@ -85,14 +85,21 @@ def parse_pyproject(text: str, manifest: str) -> list[Dependency]:
         parsed = parse_requirement_line(str(entry))
         if parsed:
             name, spec = parsed
-            deps.append(Dependency(normalize_name(name), spec, _pinned_version(spec), manifest,
-                                   _line_of(text, str(entry))))
+            deps.append(
+                Dependency(
+                    normalize_name(name), spec, _pinned_version(spec), manifest, _line_of(text, str(entry))
+                )
+            )
     poetry = ((data.get("tool", {}) or {}).get("poetry", {}) or {}).get("dependencies", {}) or {}
     for name, spec in poetry.items():
         if name.lower() == "python":
             continue
         version_spec = spec.get("version", "") if isinstance(spec, dict) else str(spec)
-        exact = version_spec if re.fullmatch(r"\d+(\.\d+)*", version_spec or "") else _pinned_version(version_spec)
+        exact = (
+            version_spec
+            if re.fullmatch(r"\d+(\.\d+)*", version_spec or "")
+            else _pinned_version(version_spec)
+        )
         deps.append(Dependency(normalize_name(name), version_spec, exact, manifest, _line_of(text, name)))
     return deps
 
@@ -106,8 +113,15 @@ def parse_lockfile(text: str, manifest: str) -> list[Dependency]:
     for pkg in data.get("package", []) or []:
         name, version = pkg.get("name"), pkg.get("version")
         if name and version:
-            deps.append(Dependency(normalize_name(name), f"=={version}", str(version), manifest,
-                                   _line_of(text, f'name = "{name}"')))
+            deps.append(
+                Dependency(
+                    normalize_name(name),
+                    f"=={version}",
+                    str(version),
+                    manifest,
+                    _line_of(text, f'name = "{name}"'),
+                )
+            )
     return deps
 
 

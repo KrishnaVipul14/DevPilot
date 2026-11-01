@@ -20,8 +20,9 @@ from devpilot.utils import git as gitutil
 
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _RISK_ORDER = ["low", "medium", "high", "critical"]
-_CRITICAL_PATH_RE = re.compile(r"(auth|security|token|jwt|crypto|permission|session|payment|billing|secret|db|migration)",
-                               re.IGNORECASE)
+_CRITICAL_PATH_RE = re.compile(
+    r"(auth|security|token|jwt|crypto|permission|session|payment|billing|secret|db|migration)", re.IGNORECASE
+)
 
 
 def _max_risk(a: str, b: str) -> str:
@@ -111,12 +112,14 @@ def _symbol_impact(graph: RepoGraph, sym: Node) -> dict[str, Any]:
         if cnode.module and cnode.module != sym.module:
             dependent_modules.add(cnode.module)
         if cnode.kind == "route":
-            routes.append({
-                "id": cnode.id,
-                "method": str(cnode.meta.get("method", "GET")),
-                "path": str(cnode.meta.get("path", "")),
-                "handler": str(cnode.meta.get("handler", "")),
-            })
+            routes.append(
+                {
+                    "id": cnode.id,
+                    "method": str(cnode.meta.get("method", "GET")),
+                    "path": str(cnode.meta.get("path", "")),
+                    "handler": str(cnode.meta.get("handler", "")),
+                }
+            )
         elif cnode.kind == "test":
             tests_map[cnode.id] = {
                 "id": cnode.id,
@@ -155,7 +158,9 @@ def _symbol_impact(graph: RepoGraph, sym: Node) -> dict[str, Any]:
     }
 
 
-def analyze_symbol_impact(ctx: RepoContext, symbol_query: str, graph: RepoGraph | None = None) -> dict[str, Any]:
+def analyze_symbol_impact(
+    ctx: RepoContext, symbol_query: str, graph: RepoGraph | None = None
+) -> dict[str, Any]:
     """Compute hypothetical change impact for a named function or class."""
     graph = graph or RepoGraph.build(ctx)
     matches = graph.find(symbol_query)
@@ -167,10 +172,15 @@ def analyze_symbol_impact(ctx: RepoContext, symbol_query: str, graph: RepoGraph 
     overall_reasons: list[str] = []
 
     for sym in matches:
-        changed_symbols.append({
-            "id": sym.id, "name": sym.name, "kind": sym.kind,
-            "file": sym.file or "", "line": sym.line,
-        })
+        changed_symbols.append(
+            {
+                "id": sym.id,
+                "name": sym.name,
+                "kind": sym.kind,
+                "file": sym.file or "",
+                "line": sym.line,
+            }
+        )
         if sym.file:
             changed_files_map.setdefault(sym.file, []).append(sym.id)
         imp = _symbol_impact(graph, sym)
@@ -255,16 +265,23 @@ def _map_changed_files_and_symbols(
     return changed_files, changed_symbols_map
 
 
-def analyze_git_impact(ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | None = None) -> dict[str, Any]:
+def analyze_git_impact(
+    ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | None = None
+) -> dict[str, Any]:
     """Analyze uncommitted working-tree changes (and staged changes) against `base`."""
     graph = graph or RepoGraph.build(ctx)
     now = datetime.now(timezone.utc).isoformat()
     if ctx.git_root is None:
         return {
-            "base": base, "mode": "git", "generated_at": now,
-            "changed_files": [], "changed_symbols": [], "impacts": [],
+            "base": base,
+            "mode": "git",
+            "generated_at": now,
+            "changed_files": [],
+            "changed_symbols": [],
+            "impacts": [],
             "overall_risk": {"level": "low", "reasons": ["Not a Git repository."]},
-            "suggested_commands": [], "limitations": list(GRAPH_LIMITATIONS),
+            "suggested_commands": [],
+            "limitations": list(GRAPH_LIMITATIONS),
         }
 
     changed_lines, effective_base = _collect_diff_lines(ctx, base)

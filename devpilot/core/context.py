@@ -56,11 +56,12 @@ class RepoContext:
     def files(self) -> list[str]:
         """All non-excluded files (POSIX paths relative to root), honouring .gitignore when in git."""
         excludes = self.config.all_excludes
-        candidates: list[str]
-        if self.git_root is not None:
+        candidates: list[str] = []
+        if self.git_root is not None and (self.root / ".git").exists():
             tracked = gitutil.git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], self.root)
-            candidates = [p for p in tracked.stdout.split("\0") if p] if tracked.ok else self._walk(excludes)
-        else:
+            if tracked.ok:
+                candidates = [p for p in tracked.stdout.split("\0") if p]
+        if not candidates:
             candidates = self._walk(excludes)
         result = []
         for rel in candidates:

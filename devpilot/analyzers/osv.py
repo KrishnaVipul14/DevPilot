@@ -20,7 +20,9 @@ class OSVError(Exception):
 def _request(url: str, payload: dict | None, timeout: float) -> Any:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(
-        url, data=data, method="POST" if data else "GET",
+        url,
+        data=data,
+        method="POST" if data else "GET",
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
     )
     try:
@@ -34,7 +36,7 @@ def query_batch(packages: list[tuple[str, str]], timeout: float = 30) -> list[li
     """Return vulnerability ids for each (name, version) PyPI package."""
     results: list[list[str]] = []
     for start in range(0, len(packages), 500):
-        chunk = packages[start:start + 500]
+        chunk = packages[start : start + 500]
         body = {"queries": [{"package": {"name": n, "ecosystem": "PyPI"}, "version": v} for n, v in chunk]}
         data = _request(f"{OSV_API}/querybatch", body, timeout)
         items = data.get("results") if isinstance(data, dict) else []
@@ -86,7 +88,13 @@ def cvss3_base_score(vector: str) -> float | None:
         scope = parts["S"]
         iss = 1 - (1 - _W["C"][parts["C"]]) * (1 - _W["I"][parts["I"]]) * (1 - _W["A"][parts["A"]])
         impact = 6.42 * iss if scope == "U" else 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
-        expl = 8.22 * _W["AV"][parts["AV"]] * _W["AC"][parts["AC"]] * _PR[scope][parts["PR"]] * _W["UI"][parts["UI"]]
+        expl = (
+            8.22
+            * _W["AV"][parts["AV"]]
+            * _W["AC"][parts["AC"]]
+            * _PR[scope][parts["PR"]]
+            * _W["UI"][parts["UI"]]
+        )
     except (KeyError, ValueError, IndexError):
         return None
     if impact <= 0:

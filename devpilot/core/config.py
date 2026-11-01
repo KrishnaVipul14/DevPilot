@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -13,21 +14,37 @@ CONFIG_FILENAMES = ("devpilot.yml", "devpilot.yaml", ".devpilot.yml")
 STATE_DIR = ".devpilot"
 
 DEFAULT_EXCLUDES = [
-    ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__",
-    ".devpilot", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    "build", "dist", "site-packages", ".next", ".eggs",
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    "__pycache__",
+    ".devpilot",
+    ".tox",
+    ".nox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "site-packages",
+    ".next",
+    ".eggs",
 ]
 
 DEFAULT_RUFF_SELECT = [
-    "F",      # pyflakes: unused imports/variables, undefined names, ...
-    "E9",     # syntax / IO errors
-    "B",      # bugbear: likely bugs and design problems
-    "C901",   # cyclomatic complexity
-    "S102",   # use of exec
-    "S307",   # use of eval
-    "S602",   # subprocess with shell=True
-    "S506",   # unsafe yaml.load
-    "E722",   # bare except
+    "F",  # pyflakes: unused imports/variables, undefined names, ...
+    "E9",  # syntax / IO errors
+    "B",  # bugbear: likely bugs and design problems
+    "C901",  # cyclomatic complexity
+    "S102",  # use of exec
+    "S307",  # use of eval
+    "S602",  # subprocess with shell=True
+    "S506",  # unsafe yaml.load
+    "E722",  # bare except
 ]
 
 
@@ -72,6 +89,7 @@ class VerifyConfig(BaseModel):
 
 
 class DevPilotConfig(BaseModel):
+    root: Path | None = None
     exclude: list[str] = Field(default_factory=list)
     analyzers: AnalyzersConfig = Field(default_factory=AnalyzersConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
@@ -94,8 +112,42 @@ def find_config(root: Path) -> Path | None:
     return None
 
 
+def _load_dotenv_keys(env_path: Path) -> dict[str, str]:
+    vars_found: dict[str, str] = {}
+    if not env_path.is_file():
+        return vars_found
+    pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
+    try:
+        for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            m = pattern.match(line)
+            if m:
+                k, v = m.group(1), m.group(2).strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1].strip()
+                if v and k not in vars_found:
+                    vars_found[k] = v
+    except OSError:
+        pass
+    return vars_found
+
+
 def load_config(root: Path) -> DevPilotConfig:
-    path = find_config(root)
+    resolved_root = root.resolve()
+    # Read any .env keys from target project root or current working dir into os.environ if not set
+    for env_cand in (resolved_root / ".env", Path.cwd() / ".env"):
+        for k, v in _load_dotenv_keys(env_cand).items():
+            if k in (
+                "GROQ_API_KEY",
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+                "DEVPILOT_AI_PROVIDER",
+                "DEVPILOT_AI_MODEL",
+            ):
+                if k not in os.environ and v:
+                    os.environ[k] = v
+
+    path = find_config(resolved_root)
+    has_explicit_provider = False
     if path is None:
         cfg = DevPilotConfig()
     else:
@@ -107,12 +159,22 @@ def load_config(root: Path) -> DevPilotConfig:
             raise ConfigError(f"{path.name} must contain a mapping at the top level")
         try:
             cfg = DevPilotConfig.model_validate(data)
+            has_explicit_provider = bool(data.get("ai", {}).get("provider"))
         except ValidationError as exc:
             raise ConfigError(f"Invalid configuration in {path.name}:\n{exc}") from exc
+
+    cfg.root = resolved_root
 
     env_provider = os.environ.get("DEVPILOT_AI_PROVIDER", "").strip().lower()
     if env_provider in ("groq", "gemini"):
         cfg.ai.provider = env_provider  # type: ignore[assignment]
+    elif not has_explicit_provider:
+        # Auto-detect if user provided a Gemini key and no Groq key
+        has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        has_groq = bool(os.environ.get("GROQ_API_KEY"))
+        if has_gemini and not has_groq:
+            cfg.ai.provider = "gemini"
+
     env_model = os.environ.get("DEVPILOT_AI_MODEL", "").strip()
     if env_model:
         cfg.ai.model = env_model

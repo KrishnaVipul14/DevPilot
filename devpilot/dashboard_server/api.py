@@ -198,17 +198,18 @@ class LocalAPI:
     def get_settings(self) -> dict[str, Any]:
         cfg = load_config(self.root)
         st = get_ai_provider(cfg).status()
-        groq_env = os.environ.get("GROQ_API_KEY", "").strip() or _read_groq_dotenv().get("GROQ_API_KEY", "").strip()
+        groq_env = (
+            os.environ.get("GROQ_API_KEY", "").strip()
+            or _read_groq_dotenv(self.root).get("GROQ_API_KEY", "").strip()
+        )
         gemini_env = (
             os.environ.get("GEMINI_API_KEY", "").strip()
             or os.environ.get("GOOGLE_API_KEY", "").strip()
-            or _read_gemini_dotenv().get("GEMINI_API_KEY", "").strip()
-            or _read_gemini_dotenv().get("GOOGLE_API_KEY", "").strip()
+            or _read_gemini_dotenv(self.root).get("GEMINI_API_KEY", "").strip()
+            or _read_gemini_dotenv(self.root).get("GOOGLE_API_KEY", "").strip()
         )
         rpath = latest_report_path(self.root)
-        has_cfg = any(
-            (self.root / fn).is_file() for fn in ("devpilot.yml", "devpilot.yaml", ".devpilot.yml")
-        )
+        has_cfg = any((self.root / fn).is_file() for fn in ("devpilot.yml", "devpilot.yaml", ".devpilot.yml"))
         return {
             "repository": {
                 "name": self.root.name,
@@ -232,19 +233,27 @@ class LocalAPI:
     def _apply_ai_settings(self, body: dict[str, Any]) -> dict[str, str]:
         dotenv_updates: dict[str, str] = {}
         provider = body.get("provider")
+        target_provider: str | None = None
         if isinstance(provider, str) and provider.strip().lower() in ("groq", "gemini"):
-            p = provider.strip().lower()
-            os.environ["DEVPILOT_AI_PROVIDER"] = p
-            dotenv_updates["DEVPILOT_AI_PROVIDER"] = p
+            target_provider = provider.strip().lower()
+            os.environ["DEVPILOT_AI_PROVIDER"] = target_provider
+            dotenv_updates["DEVPILOT_AI_PROVIDER"] = target_provider
 
         model = body.get("model")
         if isinstance(model, str):
             m = model.strip()
+            if target_provider == "gemini" and any(
+                k in m.lower() for k in ("llama", "mixtral", "gemma", "qwen", "openai", "gpt")
+            ):
+                m = ""
+            elif target_provider == "groq" and "gemini" in m.lower():
+                m = ""
             if m:
                 os.environ["DEVPILOT_AI_MODEL"] = m
                 dotenv_updates["DEVPILOT_AI_MODEL"] = m
             else:
                 os.environ.pop("DEVPILOT_AI_MODEL", None)
+                dotenv_updates["DEVPILOT_AI_MODEL"] = ""
 
         groq_key = body.get("groq_api_key")
         if isinstance(groq_key, str) and groq_key.strip():
@@ -267,11 +276,12 @@ class LocalAPI:
 
         dotenv_updates = self._apply_ai_settings(body)
         if body.get("persist_to_env", True) and dotenv_updates:
-            env_file = Path.cwd() / ".env"
-            update_dotenv_file(env_file, dotenv_updates)
-            repo_env = self.root / ".env"
-            if repo_env != env_file and repo_env.is_file():
-                update_dotenv_file(repo_env, dotenv_updates)
+            # Always save to active target repo .env
+            update_dotenv_file(self.root / ".env", dotenv_updates)
+            # Also save to current working dir .env if distinct
+            cwd_env = Path.cwd() / ".env"
+            if cwd_env.resolve() != (self.root / ".env").resolve():
+                update_dotenv_file(cwd_env, dotenv_updates)
 
         return self.get_settings()
 

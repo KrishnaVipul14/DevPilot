@@ -144,8 +144,16 @@ class MemoryDB:
             """,
             [
                 (
-                    report.scan_id, f.fingerprint, f.id, f.module, f.rule,
-                    f.severity.value, f.title, f.file, f.line, f.status.value,
+                    report.scan_id,
+                    f.fingerprint,
+                    f.id,
+                    f.module,
+                    f.rule,
+                    f.severity.value,
+                    f.title,
+                    f.file,
+                    f.line,
+                    f.status.value,
                 )
                 for f in report.findings
             ],
@@ -155,21 +163,16 @@ class MemoryDB:
         """Compare `report.findings` against previous scans, set `finding.status` and
         `finding.verification`, persist the scan, and return the `MemoryDelta`."""
         with self._connect() as conn:
-            prev_row = conn.execute(
-                "SELECT scan_id FROM scans ORDER BY finished_at DESC LIMIT 1"
-            ).fetchone()
+            prev_row = conn.execute("SELECT scan_id FROM scans ORDER BY finished_at DESC LIMIT 1").fetchone()
             prev_scan_id: str | None = prev_row["scan_id"] if prev_row else None
 
             prev_fps: dict[str, sqlite3.Row] = {}
             if prev_scan_id:
-                for r in conn.execute(
-                    "SELECT * FROM finding_sightings WHERE scan_id = ?", (prev_scan_id,)
-                ):
+                for r in conn.execute("SELECT * FROM finding_sightings WHERE scan_id = ?", (prev_scan_id,)):
                     prev_fps[r["fingerprint"]] = r
 
             ever_seen: set[str] = {
-                r["fingerprint"]
-                for r in conn.execute("SELECT DISTINCT fingerprint FROM finding_sightings")
+                r["fingerprint"] for r in conn.execute("SELECT DISTINCT fingerprint FROM finding_sightings")
             }
             ver_map = self._get_verification_map(conn)
             new_c = existing_c = reintro_c = sev_changed_c = 0
@@ -233,8 +236,11 @@ class MemoryDB:
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    exp.finding_fingerprint, exp.provider, exp.model,
-                    exp.created_at.isoformat(), exp.model_dump_json(),
+                    exp.finding_fingerprint,
+                    exp.provider,
+                    exp.model,
+                    exp.created_at.isoformat(),
+                    exp.model_dump_json(),
                 ),
             )
 
@@ -277,10 +283,18 @@ class MemoryDB:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    patch["patch_id"], patch["finding_id"], patch["fingerprint"],
-                    patch["title"], patch["engine"], patch["summary"], patch["status"],
-                    patch["created_at"], patch["diff"], json.dumps(patch["files"]),
-                    json.dumps(edits), json.dumps(file_hashes),
+                    patch["patch_id"],
+                    patch["finding_id"],
+                    patch["fingerprint"],
+                    patch["title"],
+                    patch["engine"],
+                    patch["summary"],
+                    patch["status"],
+                    patch["created_at"],
+                    patch["diff"],
+                    json.dumps(patch["files"]),
+                    json.dumps(edits),
+                    json.dumps(file_hashes),
                     json.dumps(patch["verification"]) if patch.get("verification") else None,
                 ),
             )
@@ -327,33 +341,37 @@ class MemoryDB:
         with self._connect() as conn:
             scans = []
             for r in conn.execute("SELECT * FROM scans ORDER BY finished_at DESC LIMIT 50"):
-                scans.append({
-                    "scan_id": r["scan_id"],
-                    "started_at": r["started_at"],
-                    "finished_at": r["finished_at"],
-                    "commit": r["commit_hash"],
-                    "branch": r["branch"],
-                    "status": r["status"],
-                    "total": r["total"],
-                    "health_score": r["health_score"],
-                    "by_severity": json.loads(r["by_severity_json"]),
-                    "new": r["new_count"],
-                    "existing": r["existing_count"],
-                    "resolved": r["resolved_count"],
-                    "reintroduced": r["reintroduced_count"],
-                })
+                scans.append(
+                    {
+                        "scan_id": r["scan_id"],
+                        "started_at": r["started_at"],
+                        "finished_at": r["finished_at"],
+                        "commit": r["commit_hash"],
+                        "branch": r["branch"],
+                        "status": r["status"],
+                        "total": r["total"],
+                        "health_score": r["health_score"],
+                        "by_severity": json.loads(r["by_severity_json"]),
+                        "new": r["new_count"],
+                        "existing": r["existing_count"],
+                        "resolved": r["resolved_count"],
+                        "reintroduced": r["reintroduced_count"],
+                    }
+                )
             verifications = []
             for r in conn.execute(
                 "SELECT * FROM patches WHERE verification_json IS NOT NULL ORDER BY created_at DESC LIMIT 50"
             ):
                 ver = json.loads(r["verification_json"])
-                verifications.append({
-                    "patch_id": r["patch_id"],
-                    "finding_id": r["finding_id"],
-                    "fingerprint": r["fingerprint"],
-                    "title": r["title"],
-                    "status": ver.get("status", r["status"]),
-                    "created_at": ver.get("finished_at") or r["created_at"],
-                    "checks": ver.get("checks", []),
-                })
+                verifications.append(
+                    {
+                        "patch_id": r["patch_id"],
+                        "finding_id": r["finding_id"],
+                        "fingerprint": r["fingerprint"],
+                        "title": r["title"],
+                        "status": ver.get("status", r["status"]),
+                        "created_at": ver.get("finished_at") or r["created_at"],
+                        "checks": ver.get("checks", []),
+                    }
+                )
             return {"scans": scans, "verifications": verifications}

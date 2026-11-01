@@ -55,32 +55,49 @@ def run_scan(
     for analyzer in analyzers or default_analyzers():
         t0 = time.monotonic()
         if not analyzer.enabled(ctx):
-            runs.append(AnalyzerRun(
-                name=analyzer.name, status=AnalyzerState.SKIPPED, duration_ms=0,
-                message="Disabled in devpilot.yml",
-            ))
+            runs.append(
+                AnalyzerRun(
+                    name=analyzer.name,
+                    status=AnalyzerState.SKIPPED,
+                    duration_ms=0,
+                    message="Disabled in devpilot.yml",
+                )
+            )
             continue
         try:
             out = analyzer.run(ctx)
             dur = int((time.monotonic() - t0) * 1000)
             all_findings.extend(out.findings)
             all_anchors.extend(out.anchors)
-            runs.append(AnalyzerRun(
-                name=analyzer.name, status=AnalyzerState.OK, duration_ms=dur,
-                findings=len(out.findings), message=out.message,
-            ))
+            runs.append(
+                AnalyzerRun(
+                    name=analyzer.name,
+                    status=AnalyzerState.OK,
+                    duration_ms=dur,
+                    findings=len(out.findings),
+                    message=out.message,
+                )
+            )
         except AnalyzerSkipped as exc:
             dur = int((time.monotonic() - t0) * 1000)
-            runs.append(AnalyzerRun(
-                name=analyzer.name, status=AnalyzerState.SKIPPED, duration_ms=dur,
-                message=str(exc),
-            ))
+            runs.append(
+                AnalyzerRun(
+                    name=analyzer.name,
+                    status=AnalyzerState.SKIPPED,
+                    duration_ms=dur,
+                    message=str(exc),
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             dur = int((time.monotonic() - t0) * 1000)
-            runs.append(AnalyzerRun(
-                name=analyzer.name, status=AnalyzerState.ERROR, duration_ms=dur,
-                message=str(exc),
-            ))
+            runs.append(
+                AnalyzerRun(
+                    name=analyzer.name,
+                    status=AnalyzerState.ERROR,
+                    duration_ms=dur,
+                    message=str(exc),
+                )
+            )
 
     assign_fingerprints(all_findings, all_anchors)
     all_findings.sort(key=lambda f: (f.severity.rank, f.file or "", f.line or 0, f.rule, f.fingerprint))
@@ -96,8 +113,10 @@ def run_scan(
     any_err = any(r.status == AnalyzerState.ERROR for r in runs)
     any_ok = any(r.status == AnalyzerState.OK for r in runs)
     status = (
-        ScanStatus.FAILED if (any_err and not any_ok)
-        else ScanStatus.PARTIAL if any_err
+        ScanStatus.FAILED
+        if (any_err and not any_ok)
+        else ScanStatus.PARTIAL
+        if any_err
         else ScanStatus.COMPLETED
     )
 

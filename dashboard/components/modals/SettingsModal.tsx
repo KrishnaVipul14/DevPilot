@@ -177,7 +177,10 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setProvider("groq")}
+                onClick={() => {
+                  setProvider("groq");
+                  if (model.toLowerCase().includes("gemini")) setModel("");
+                }}
                 className={`flex flex-col items-start p-3 rounded-lg border text-left transition-colors ${
                   provider === "groq"
                     ? "border-violet-500 bg-violet-950/20 text-zinc-100"
@@ -197,7 +200,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
               <button
                 type="button"
-                onClick={() => setProvider("gemini")}
+                onClick={() => {
+                  setProvider("gemini");
+                  const m = model.toLowerCase();
+                  if (m.includes("llama") || m.includes("mixtral") || m.includes("gemma") || m.includes("qwen")) {
+                    setModel("");
+                  }
+                }}
                 className={`flex flex-col items-start p-3 rounded-lg border text-left transition-colors ${
                   provider === "gemini"
                     ? "border-violet-500 bg-violet-950/20 text-zinc-100"
@@ -206,7 +215,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               >
                 <div className="font-medium text-xs">Google Gemini</div>
                 <span className="text-[10px] text-zinc-500 mt-1">
-                  Default: gemini-2.5-flash / 1.5-flash
+                  Default: gemini-flash-lite-latest
                 </span>
               </button>
             </div>
@@ -268,7 +277,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder={provider === "groq" ? "llama-3.3-70b-versatile" : "gemini-1.5-flash"}
+              placeholder={provider === "groq" ? "llama-3.3-70b-versatile" : "gemini-flash-lite-latest"}
               disabled={saving || loading}
               className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs font-mono text-zinc-200 placeholder-zinc-500 focus:border-violet-500 focus:outline-none disabled:opacity-50"
             />

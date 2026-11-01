@@ -20,13 +20,12 @@ from typing import Any
 from devpilot.ai.provider import AIProvider, AIProviderError, AIStatus, is_ai_disabled
 from devpilot.core.config import DevPilotConfig
 
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 FALLBACK_GROQ_MODELS = [
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    "qwen/qwen3.8-27b",
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 ]
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
@@ -36,7 +35,7 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _ENV_LINE_RE = re.compile(r"^\s*(?:export\s+)?(GROQ_API_KEY|DEVPILOT_GROQ_MODEL)\s*=\s*(.*?)\s*$")
 
 
-def _read_dotenv_vars() -> dict[str, str]:
+def _read_dotenv_vars(root: Path | None = None) -> dict[str, str]:
     """Read `GROQ_API_KEY` / `DEVPILOT_GROQ_MODEL` from a local `.env` file if present."""
     found: dict[str, str] = {}
     repo_root = Path(__file__).resolve().parent.parent.parent
@@ -46,6 +45,9 @@ def _read_dotenv_vars() -> dict[str, str]:
         Path.cwd().parent.parent / ".env",
         repo_root / ".env",
     ]
+    if root is not None:
+        candidates.insert(0, root / ".env")
+        candidates.insert(1, root.parent / ".env")
     for candidate in candidates:
         if not candidate.is_file():
             continue
@@ -88,19 +90,24 @@ class GroqProvider(AIProvider):
 
     def __init__(self, config: DevPilotConfig) -> None:
         self.config = config
-        self._dotenv = _read_dotenv_vars()
+        extra_root = getattr(config, "root", None)
+        self._dotenv = _read_dotenv_vars(extra_root)
         self.model = (
             config.ai.model
             or os.environ.get("DEVPILOT_GROQ_MODEL", "").strip()
             or self._dotenv.get("DEVPILOT_GROQ_MODEL", "").strip()
             or DEFAULT_GROQ_MODEL
         )
+        norm_model = self.model.strip().lower()
+        if (
+            norm_model.startswith("openai/")
+            or "gemini" in norm_model
+            or any(k in norm_model for k in ("claude", "anthropic"))
+        ):
+            self.model = DEFAULT_GROQ_MODEL
 
     def _api_key(self) -> str:
-        return (
-            os.environ.get("GROQ_API_KEY", "").strip()
-            or self._dotenv.get("GROQ_API_KEY", "").strip()
-        )
+        return os.environ.get("GROQ_API_KEY", "").strip() or self._dotenv.get("GROQ_API_KEY", "").strip()
 
     def status(self) -> AIStatus:
         disabled, reason = is_ai_disabled(self.config)
@@ -111,7 +118,7 @@ class GroqProvider(AIProvider):
                 available=False,
                 provider=self.name,
                 model=self.model,
-                reason="GROQ_API_KEY environment variable is not set",
+                reason="GROQ_API_KEY is not set (add it in .env or via Web Settings)",
             )
         return AIStatus(available=True, provider=self.name, model=self.model, reason="Ready")
 
@@ -134,7 +141,12 @@ class GroqProvider(AIProvider):
         ]
 
     def _call_model(
-        self, model_name: str, system_prompt: str, user_prompt: str, timeout: float, use_json_format: bool = True
+        self,
+        model_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        timeout: float,
+        use_json_format: bool = True,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model_name,
@@ -171,7 +183,9 @@ class GroqProvider(AIProvider):
 
         for idx, candidate in enumerate(candidates):
             try:
-                raw = self._call_model(candidate, system_prompt, user_prompt, effective_timeout, use_json_format=True)
+                raw = self._call_model(
+                    candidate, system_prompt, user_prompt, effective_timeout, use_json_format=True
+                )
                 self.model = candidate
                 break
             except urllib.error.HTTPError as exc:
@@ -199,7 +213,9 @@ class GroqProvider(AIProvider):
                                 candidates.append(disc)
                     continue
                 if exc.code == 429:
-                    raise AIProviderError("Groq API rate limit exceeded (HTTP 429). Please retry shortly.") from exc
+                    raise AIProviderError(
+                        "Groq API rate limit exceeded (HTTP 429). Please retry shortly."
+                    ) from exc
                 detail = f" ({err_body})" if err_body else ""
                 raise AIProviderError(f"Groq API HTTP {exc.code}: {exc.reason}{detail}") from exc
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:

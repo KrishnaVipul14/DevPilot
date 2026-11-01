@@ -88,7 +88,9 @@ def print_scan_report(report: Report, max_rows: int = 40) -> None:
             f"{g.routes} routes, {g.tests} tests ({g.edges} edges)",
         )
 
-    console.print(Panel(header, title="[bold]DevPilot Repository Intelligence Scan[/bold]", border_style="blue"))
+    console.print(
+        Panel(header, title="[bold]DevPilot Repository Intelligence Scan[/bold]", border_style="blue")
+    )
 
     # Analyzer table
     atab = Table(title="Analyzer Execution", box=None, pad_edge=False)
@@ -99,8 +101,10 @@ def print_scan_report(report: Report, max_rows: int = 40) -> None:
     atab.add_column("Details", style="dim")
     for a in report.analyzers:
         st_color = (
-            "green" if a.status == AnalyzerState.OK
-            else "yellow" if a.status == AnalyzerState.SKIPPED
+            "green"
+            if a.status == AnalyzerState.OK
+            else "yellow"
+            if a.status == AnalyzerState.SKIPPED
             else "red"
         )
         atab.add_row(
@@ -149,7 +153,10 @@ def print_finding_detail(f: Finding, exp: AIExplanation | None = None) -> None:
     grid.add_row("ID / Rule:", f"{f.id} ({f.module} / {f.rule})  [dim]fp:{f.fingerprint}[/dim]")
     grid.add_row("Severity:", sev_badge(f.severity))
     grid.add_row("Location:", loc + (f"  symbol: `{f.symbol}`" if f.symbol else ""))
-    grid.add_row("Confidence:", f"{f.confidence.value}  |  Status: {f.status.value}  |  Verification: {f.verification.value}")
+    grid.add_row(
+        "Confidence:",
+        f"{f.confidence.value}  |  Status: {f.status.value}  |  Verification: {f.verification.value}",
+    )
     grid.add_row("Evidence:", f.evidence)
     grid.add_row("Suggestion:", f.suggestion)
     if f.references:
@@ -169,7 +176,13 @@ def print_finding_detail(f: Finding, exp: AIExplanation | None = None) -> None:
             ai_grid.add_row("Suggested Tests:", "\n".join(f"• {t}" for t in exp.suggested_tests))
         if exp.caveats:
             ai_grid.add_row("Caveats:", f"[dim]{exp.caveats}[/dim]")
-        console.print(Panel(ai_grid, title="[bold magenta]AI Engineering Explanation[/bold magenta]", border_style="magenta"))
+        console.print(
+            Panel(
+                ai_grid,
+                title="[bold magenta]AI Engineering Explanation[/bold magenta]",
+                border_style="magenta",
+            )
+        )
 
 
 def print_impact(impact: dict[str, Any]) -> None:
@@ -180,7 +193,9 @@ def print_impact(impact: dict[str, Any]) -> None:
     top = Table.grid(padding=(0, 2))
     top.add_column(style="bold")
     top.add_column()
-    top.add_row("Mode:", f"{impact.get('mode', 'git')}" + (f" (base: {impact['base']})" if impact.get("base") else ""))
+    top.add_row(
+        "Mode:", f"{impact.get('mode', 'git')}" + (f" (base: {impact['base']})" if impact.get("base") else "")
+    )
     top.add_row("Changed Files:", str(len(impact.get("changed_files", []))))
     top.add_row("Changed Symbols:", str(len(impact.get("changed_symbols", []))))
     top.add_row("Estimated Risk:", Text(lvl.upper(), style=rstyle))
@@ -202,17 +217,23 @@ def print_impact(impact: dict[str, Any]) -> None:
         )
         itab.add_row(
             "Dependent Modules:",
-            ", ".join(item["dependent_modules"]) if item.get("dependent_modules") else "[dim]None identified[/dim]",
+            ", ".join(item["dependent_modules"])
+            if item.get("dependent_modules")
+            else "[dim]None identified[/dim]",
         )
         routes = item.get("routes") or []
         itab.add_row(
             "API Endpoints:",
-            ", ".join(f"{r['method']} {r['path']}" for r in routes) if routes else "[dim]None identified[/dim]",
+            ", ".join(f"{r['method']} {r['path']}" for r in routes)
+            if routes
+            else "[dim]None identified[/dim]",
         )
         tests = item.get("tests") or []
         itab.add_row(
             "Relevant Tests:",
-            ", ".join(f"{t['nodeid']} ({t['certainty']})" for t in tests) if tests else "[yellow]None identified[/yellow]",
+            ", ".join(f"{t['nodeid']} ({t['certainty']})" for t in tests)
+            if tests
+            else "[yellow]None identified[/yellow]",
         )
         console.print(Panel(itab, title=f"Symbol: [bold]{item['symbol']}[/bold]"))
 
@@ -279,7 +300,9 @@ def print_plan(plan: dict[str, Any]) -> None:
         grid.add_row("Why it matters:", t.get("why", ""))
         grid.add_row("Resolution:", t.get("resolution", ""))
         grid.add_row("Findings:", ", ".join(t.get("finding_ids", [])))
-        grid.add_row("Verification:", ", ".join(t.get("tests", [])) + f"  (effort: {t.get('effort', 'small')})")
+        grid.add_row(
+            "Verification:", ", ".join(t.get("tests", [])) + f"  (effort: {t.get('effort', 'small')})"
+        )
         console.print(Panel(grid, title=f"[bold]Priority #{t.get('priority')}: {t.get('title')}[/bold]"))
 
 
@@ -301,7 +324,9 @@ def print_patch(patch: dict[str, Any]) -> None:
 
     ver = patch.get("verification")
     if ver:
-        vtab = Table(title=f"Verification Result: {ver['status'].upper()} (isolated {ver.get('mode', 'worktree')})")
+        vtab = Table(
+            title=f"Verification Result: {ver['status'].upper()} (isolated {ver.get('mode', 'worktree')})"
+        )
         vtab.add_column("Check", style="bold")
         vtab.add_column("Status")
         vtab.add_column("Duration", justify="right")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import urllib.request
@@ -57,13 +58,17 @@ def test_cvss3_score_and_manifest_parsing() -> None:
 
 def test_stable_fingerprint_line_independence() -> None:
     fp1 = compute_fingerprint("code_health", "F401", "auth.py", "|`json` imported but unused|import json")
-    fp2 = compute_fingerprint("code_health", "F401", "auth.py", "|`json`   imported but unused|import   json  ")
+    fp2 = compute_fingerprint(
+        "code_health", "F401", "auth.py", "|`json`   imported but unused|import   json  "
+    )
     assert fp1 == fp2
 
 
 def test_repository_graph_and_symbol_impact(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
-    shutil.copytree(DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache"))
+    shutil.copytree(
+        DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache")
+    )
     ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
     graph = RepoGraph.build(ctx)
     summary = graph.summary()
@@ -83,7 +88,9 @@ def test_repository_graph_and_symbol_impact(tmp_path: Path) -> None:
 
 def test_scan_memory_fix_verify_lifecycle(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
-    shutil.copytree(DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache"))
+    shutil.copytree(
+        DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache")
+    )
 
     # Initialize git repo so git worktree verification and git impact work end-to-end
     gitutil.git(["init"], cwd=repo)
@@ -145,7 +152,9 @@ def test_scan_memory_fix_verify_lifecycle(tmp_path: Path) -> None:
 
 def test_cli_commands_and_local_api_server(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
-    shutil.copytree(DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache"))
+    shutil.copytree(
+        DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache")
+    )
 
     res_init = runner.invoke(app, ["init", str(repo)])
     assert res_init.exit_code == 0
@@ -299,12 +308,14 @@ def test_settings_and_repository_change_endpoints(tmp_path: Path) -> None:
             assert "ai" in data
 
         # 2. POST /api/settings (update AI provider and keys)
-        update_body = json.dumps({
-            "provider": "gemini",
-            "model": "gemini-1.5-flash",
-            "gemini_api_key": "AIzaSyTestGeminiKey1234",
-            "persist_to_env": False,
-        }).encode("utf-8")
+        update_body = json.dumps(
+            {
+                "provider": "gemini",
+                "model": "gemini-1.5-flash",
+                "gemini_api_key": "AIzaSyTestGeminiKey1234",
+                "persist_to_env": False,
+            }
+        ).encode("utf-8")
         post_req = urllib.request.Request(
             f"{base_url}/api/settings",
             data=update_body,
@@ -352,4 +363,46 @@ def test_settings_and_repository_change_endpoints(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+        for k in ("DEVPILOT_AI_PROVIDER", "DEVPILOT_AI_MODEL", "GEMINI_API_KEY", "GROQ_API_KEY"):
+            os.environ.pop(k, None)
 
+
+def test_new_project_module_discovery_and_ai_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DEVPILOT_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("DEVPILOT_AI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    # Standalone non-git project with nested packages and local sibling imports
+    proj = tmp_path / "standalone_project"
+    (proj / "app").mkdir(parents=True)
+    (proj / "app" / "models.py").write_text("class User:\n    pass\n", encoding="utf-8")
+    (proj / "app" / "services.py").write_text(
+        "from models import User\nimport os\ndef get_user():\n    unused = 123\n    return User()\n",
+        encoding="utf-8",
+    )
+    (proj / ".env").write_text("GROQ_API_KEY=gsk_test_key_from_env_123456\n", encoding="utf-8")
+
+    cfg = load_config(proj)
+    assert cfg.root == proj.resolve()
+
+    # Verify AI provider loaded the key from proj/.env and uses the valid default model
+    from devpilot.ai.provider import get_ai_provider
+
+    provider = get_ai_provider(cfg)
+    assert provider.name == "groq"
+    assert provider.model == "llama-3.3-70b-versatile"
+    status = provider.status()
+    assert status.available is True
+
+    # Scan standalone project
+    report = run_scan(proj, config=cfg, offline=True, persist=True)
+    assert report.summary.files_scanned >= 2
+    assert report.graph is not None
+    assert report.graph.modules >= 2
+
+    # Verify that Ruff findings in an external directory outside cwd are kept (not dropped)
+    rules = {f.rule for f in report.findings}
+    assert "F841" in rules  # unused local variable in services.py
