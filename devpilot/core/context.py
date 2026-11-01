@@ -99,6 +99,14 @@ class RepoContext:
         return [f for f in self.files if f.endswith(".py")]
 
     @cached_property
+    def js_ts_files(self) -> list[str]:
+        return [
+            f
+            for f in self.files
+            if f.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")) and not f.endswith(".d.ts")
+        ]
+
+    @cached_property
     def kotlin_files(self) -> list[str]:
         return [f for f in self.files if f.endswith((".kt", ".kts"))]
 

@@ -251,11 +251,23 @@ class SetupDoctorAnalyzer(Analyzer):
             for hit in hits:
                 label = f"`{hit.name}`" if hit.name else hit.kind
                 confidence = Confidence.LOW if in_tests else Confidence(hit.confidence)
+                is_crit = any(
+                    k in hit.kind
+                    for k in (
+                        "Private key",
+                        "AWS access key",
+                        "Stripe live secret",
+                        "Google API key",
+                        "GitHub token",
+                        "Groq API key",
+                    )
+                )
+                sev = Severity.MEDIUM if in_tests else (Severity.CRITICAL if is_crit else Severity.HIGH)
                 out.add(
                     Finding(
                         module=self.name,
                         rule="hardcoded-secret",
-                        severity=Severity.MEDIUM if in_tests else Severity.HIGH,
+                        severity=sev,
                         title=f"Possible hardcoded secret ({hit.kind})",
                         file=rel,
                         line=hit.line,

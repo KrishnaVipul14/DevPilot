@@ -124,11 +124,13 @@ class LocalAPI:
     def get_plan(self) -> dict[str, Any]:
         return {"plan": MemoryDB(self.root).get_latest_plan()}
 
-    def post_plan(self) -> dict[str, Any]:
+    def post_plan(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
         report = load_latest_report(self.root, refresh_from_memory=True)
         if report is None:
             raise APIHTTPError(404, "No scan report found. Run `devpilot scan .` first.")
-        plan = generate_plan(self._ctx(), report, prefer_ai=True)
+        b = body or {}
+        prefer_ai = not bool(b.get("deterministic", False)) and bool(b.get("prefer_ai", True))
+        plan = generate_plan(self._ctx(), report, prefer_ai=prefer_ai)
         return {"plan": plan}
 
     def get_patches(self) -> dict[str, Any]:

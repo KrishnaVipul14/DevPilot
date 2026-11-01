@@ -35,6 +35,18 @@ SCAN_LIMITATIONS = [
 ]
 
 
+def _compute_tree_hash(ctx: RepoContext) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    for rel in sorted(ctx.files)[:200]:
+        h.update(rel.encode("utf-8"))
+        text = ctx.read_text(rel)
+        if text is not None:
+            h.update(text[:1000].encode("utf-8", errors="replace"))
+    return h.hexdigest()[:12]
+
+
 def run_scan(
     root: Path,
     config: DevPilotConfig | None = None,
@@ -121,11 +133,12 @@ def run_scan(
     )
 
     git_root_path = ctx.git_root
+    head_c = gitutil.head_commit(root) if git_root_path else None
     repo_info = RepositoryInfo(
         name=root.name,
         path=str(root),
         git_root=str(git_root_path) if git_root_path else None,
-        commit=gitutil.head_commit(root) if git_root_path else None,
+        commit=head_c if head_c else f"tree-{_compute_tree_hash(ctx)}",
         branch=gitutil.current_branch(root) if git_root_path else None,
         dirty=gitutil.is_dirty(root) if git_root_path else None,
     )
