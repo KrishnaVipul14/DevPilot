@@ -1,4 +1,9 @@
-"""Gemini REST API provider (stdlib urllib, no heavy SDK required)."""
+"""Gemini REST API provider (stdlib urllib, no heavy SDK required).
+
+Includes automatic `.env` key discovery (without exposing values), model
+fallback across common Gemini model IDs if a model returns HTTP 404 on the
+user's API key tier, and detailed error diagnostics.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +12,44 @@ import os
 import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from devpilot.ai.provider import AIProvider, AIProviderError, AIStatus, is_ai_disabled
 from devpilot.core.config import DevPilotConfig
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+FALLBACK_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-pro",
+]
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_ENV_LINE_RE = re.compile(r"^\s*(?:export\s+)?(GEMINI_API_KEY|GOOGLE_API_KEY|DEVPILOT_GEMINI_MODEL)\s*=\s*(.*?)\s*$")
+
+
+def _read_dotenv_vars() -> dict[str, str]:
+    """Read only GEMINI_API_KEY / GOOGLE_API_KEY / DEVPILOT_GEMINI_MODEL from a local `.env` if not in os.environ."""
+    found: dict[str, str] = {}
+    for candidate in (Path.cwd() / ".env", Path.cwd().parent / ".env", Path.cwd().parent.parent / ".env"):
+        if not candidate.is_file():
+            continue
+        try:
+            for line in candidate.read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = _ENV_LINE_RE.match(line)
+                if m:
+                    key, val = m.group(1), m.group(2).strip()
+                    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                        val = val[1:-1].strip()
+                    if val and key not in found:
+                        found[key] = val
+        except OSError:
+            continue
+    return found
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -35,21 +70,34 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return obj
 
 
+def _normalize_model_name(name: str) -> str:
+    name = name.strip()
+    if name.startswith("models/"):
+        name = name[len("models/") :]
+    return name
+
+
 class GeminiProvider(AIProvider):
     name = "gemini"
 
     def __init__(self, config: DevPilotConfig) -> None:
         self.config = config
-        self.model = (
+        dotenv = _read_dotenv_vars()
+        raw_model = (
             config.ai.model
             or os.environ.get("DEVPILOT_GEMINI_MODEL", "").strip()
+            or dotenv.get("DEVPILOT_GEMINI_MODEL", "").strip()
             or DEFAULT_GEMINI_MODEL
         )
+        self.model = _normalize_model_name(raw_model)
+        self._dotenv = dotenv
 
     def _api_key(self) -> str:
         return (
             os.environ.get("GEMINI_API_KEY", "").strip()
             or os.environ.get("GOOGLE_API_KEY", "").strip()
+            or self._dotenv.get("GEMINI_API_KEY", "").strip()
+            or self._dotenv.get("GOOGLE_API_KEY", "").strip()
         )
 
     def status(self) -> AIStatus:
@@ -65,11 +113,29 @@ class GeminiProvider(AIProvider):
             )
         return AIStatus(available=True, provider=self.name, model=self.model, reason="Ready")
 
-    def generate_json(self, system_prompt: str, user_prompt: str, timeout: float = 60) -> dict[str, Any]:
-        st = self.status()
-        if not st.available:
-            raise AIProviderError(st.reason)
-        url = f"{GEMINI_API_BASE}/{self.model}:generateContent"
+    def _discover_available_model(self, timeout: float) -> str | None:
+        """Query ListModels on the user's API key if static model names return 404."""
+        req = urllib.request.Request(
+            GEMINI_API_BASE,
+            method="GET",
+            headers={"x-goog-api-key": self._api_key()},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
+        for m in data.get("models") or []:
+            methods = m.get("supportedGenerationMethods") or []
+            name = _normalize_model_name(str(m.get("name") or ""))
+            if "generateContent" in methods and "gemini" in name and "vision" not in name and "embedding" not in name:
+                return name
+        return None
+
+    def _call_model(
+        self, model_name: str, system_prompt: str, user_prompt: str, timeout: float
+    ) -> dict[str, Any]:
+        url = f"{GEMINI_API_BASE}/{model_name}:generateContent"
         payload = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -87,15 +153,54 @@ class GeminiProvider(AIProvider):
                 "x-goog-api-key": self._api_key(),
             },
         )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout or self.config.ai.timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                raise AIProviderError("Gemini API rate limit exceeded (HTTP 429). Please retry shortly.") from exc
-            raise AIProviderError(f"Gemini API HTTP {exc.code}: {exc.reason}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-            raise AIProviderError(f"Gemini API request failed: {exc}") from exc
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def generate_json(self, system_prompt: str, user_prompt: str, timeout: float = 60) -> dict[str, Any]:
+        st = self.status()
+        if not st.available:
+            raise AIProviderError(st.reason)
+
+        effective_timeout = timeout or self.config.ai.timeout
+        candidates_to_try = [self.model] + [m for m in FALLBACK_MODELS if m != self.model]
+        last_404_detail = ""
+        raw: dict[str, Any] | None = None
+
+        for candidate in candidates_to_try:
+            try:
+                raw = self._call_model(candidate, system_prompt, user_prompt, effective_timeout)
+                self.model = candidate
+                break
+            except urllib.error.HTTPError as exc:
+                err_body = ""
+                try:
+                    err_json = json.loads(exc.read().decode("utf-8", errors="ignore"))
+                    err_body = str((err_json.get("error") or {}).get("message") or "")
+                except Exception:  # noqa: BLE001
+                    pass
+                if exc.code == 404:
+                    last_404_detail = err_body or f"model '{candidate}' not found"
+                    continue
+                if exc.code == 429:
+                    raise AIProviderError("Gemini API rate limit exceeded (HTTP 429). Please retry shortly.") from exc
+                detail = f" ({err_body})" if err_body else ""
+                raise AIProviderError(f"Gemini API HTTP {exc.code}: {exc.reason}{detail}") from exc
+            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+                raise AIProviderError(f"Gemini API request failed: {exc}") from exc
+
+        if raw is None:
+            discovered = self._discover_available_model(effective_timeout)
+            if discovered and discovered not in candidates_to_try:
+                try:
+                    raw = self._call_model(discovered, system_prompt, user_prompt, effective_timeout)
+                    self.model = discovered
+                except Exception as exc:  # noqa: BLE001
+                    raise AIProviderError(f"Gemini API HTTP 404 ({last_404_detail})") from exc
+            else:
+                raise AIProviderError(
+                    f"Gemini API HTTP 404: No compatible Gemini model found for this API key ({last_404_detail}). "
+                    "Check that your GEMINI_API_KEY is a valid Google AI Studio key."
+                )
 
         try:
             candidates = raw.get("candidates") or []
