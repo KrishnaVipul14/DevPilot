@@ -102,6 +102,65 @@ export const api = {
     post<SettingsResponse>("/api/settings", body),
   changeRepository: (path: string) =>
     post<StatusResponse>("/api/repository", { path }),
+  demo: () =>
+    post<{ status: StatusResponse; report: Report }>("/api/demo"),
   scan: (options: ScanRequest = {}) =>
     post<ScanResponse>("/api/scan", options),
+  mermaid: () =>
+    get<{ mermaid: string }>("/api/mermaid"),
+  ask: (question: string) =>
+    post<{
+      question: string;
+      answer: string;
+      provider: string;
+      model: string;
+      offline: boolean;
+      referenced_files: string[];
+    }>("/api/ask", { question }),
+  testgen: (symbol: string) =>
+    post<{
+      symbol: string;
+      target_file: string;
+      suggested_test_file: string;
+      language: string;
+      framework: string;
+      command: string;
+      success: boolean;
+      test_code: string;
+      error?: string;
+    }>("/api/testgen", { symbol }),
+  deadcode: () =>
+    get<{
+      dead_symbols_count: number;
+      lines_reclaimable: number;
+      symbols: Array<{
+        id: string;
+        name: string;
+        kind: string;
+        file: string;
+        line: number | null;
+        lines_of_code: number;
+        reason: string;
+      }>;
+    }>("/api/deadcode"),
+  review: (base = "HEAD~1") =>
+    post<{
+      verdict: string;
+      summary: string;
+      key_strengths: string[];
+      critical_risks: string[];
+      actionable_suggestions: string[];
+      markdown_review: string;
+      provider: string;
+    }>("/api/review", { base }),
+  pr: (base = "HEAD~1") =>
+    post<{
+      title: string;
+      summary: string;
+      changes: string[];
+      impact: string;
+      testing_plan: string[];
+      markdown_pr: string;
+      provider: string;
+    }>("/api/pr", { base }),
 };

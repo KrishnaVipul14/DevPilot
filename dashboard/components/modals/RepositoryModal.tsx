@@ -43,6 +43,26 @@ export function RepositoryModal({ open, onClose }: RepositoryModalProps) {
 
   if (!open) return null;
 
+  const handleLoadDemo = async () => {
+    setLoading(true);
+    setLoadingAction("switch");
+    setError(null);
+    setSuccess(null);
+    try {
+      await api.demo();
+      await refreshAll();
+      setSuccess("Loaded Demo Project successfully!");
+      setTimeout(() => {
+        onClose();
+      }, 700);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+      setLoadingAction(null);
+    }
+  };
+
   const handleSwitchOnly = async () => {
     const target = pathInput.trim();
     if (!target) {
@@ -133,6 +153,26 @@ export function RepositoryModal({ open, onClose }: RepositoryModalProps) {
               {success}
             </div>
           )}
+
+          <div className="rounded-lg border border-violet-800/40 bg-violet-950/20 p-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-violet-200">
+                <span>🚀 Built-in Demo Project</span>
+                <span className="rounded bg-violet-500/20 px-1 py-0.2 text-[10px] text-violet-300">demo-app</span>
+              </div>
+              <div className="text-[11px] text-zinc-400 mt-0.5">
+                Auth routes, billing logic, vulnerabilities, test cases, and action plans.
+              </div>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={handleLoadDemo}
+              disabled={loading}
+              className="shrink-0 border-violet-700 bg-violet-900/30 text-violet-200 hover:bg-violet-800/50 text-xs py-1 px-2.5"
+            >
+              Load Demo
+            </Button>
+          </div>
 
           <div>
             <label className="block text-xs font-medium text-zinc-300 mb-1.5">

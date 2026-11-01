@@ -35,14 +35,20 @@ class AIProvider(ABC):
         raise NotImplementedError
 
 
-def get_ai_provider(config: DevPilotConfig) -> AIProvider:
+def get_ai_provider(config: DevPilotConfig | None = None) -> AIProvider:
+    if config is None:
+        config = DevPilotConfig()
     provider = config.ai.provider
     env_provider = os.environ.get("DEVPILOT_AI_PROVIDER", "").strip().lower()
-    if not env_provider:
+    if env_provider in ("gemini", "groq"):
+        provider = env_provider
+    else:
         has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         has_groq = bool(os.environ.get("GROQ_API_KEY"))
         if has_gemini and not has_groq:
             provider = "gemini"
+        elif has_groq and not has_gemini:
+            provider = "groq"
 
     if provider == "gemini":
         from devpilot.ai.gemini import GeminiProvider

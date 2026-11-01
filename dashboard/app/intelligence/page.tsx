@@ -1,13 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { GitCommit, Network, Search } from "lucide-react";
+import { Bot, FlaskConical, GitCommit, GitPullRequest, Network, Search, Trash2 } from "lucide-react";
 import { useData } from "@/components/DataProvider";
 import { Badge, InferredTag, RiskBadge } from "@/components/ui/Badge";
 import { Button, Spinner } from "@/components/ui/Button";
 import { Card, PageHeader, Stat } from "@/components/ui/Card";
 import { CommandLine, EmptyState, ErrorBanner, NoScanState } from "@/components/ui/States";
+import { ArchitectAskModal } from "@/components/intelligence/ArchitectAskModal";
+import { ArchitectureMermaidModal } from "@/components/intelligence/ArchitectureMermaidModal";
+import { CodeReviewModal } from "@/components/intelligence/CodeReviewModal";
+import { DeadCodeModal } from "@/components/intelligence/DeadCodeModal";
 import { RouteExplorer } from "@/components/intelligence/RouteExplorer";
+import { TestScaffoldModal } from "@/components/intelligence/TestScaffoldModal";
 import { api, errorMessage } from "@/lib/api";
 import { fileLoc } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -26,6 +31,13 @@ export default function IntelligencePage() {
 
   const [nodeFilter, setNodeFilter] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  const [askModalOpen, setAskModalOpen] = useState(false);
+  const [mermaidModalOpen, setMermaidModalOpen] = useState(false);
+  const [testgenOpen, setTestgenOpen] = useState(false);
+  const [testgenSymbol, setTestgenSymbol] = useState("");
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [deadCodeModalOpen, setDeadCodeModalOpen] = useState(false);
 
   const graph = graphState.data;
 
@@ -96,6 +108,38 @@ export default function IntelligencePage() {
       <PageHeader
         title="Code Intelligence & Change Impact"
         description="Static AST dependency graph, call relationships, route handlers, and Git blast-radius analysis"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              icon={<GitPullRequest className="h-3.5 w-3.5 text-sky-400" />}
+              onClick={() => setReviewModalOpen(true)}
+            >
+              PR Review & Generator
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Trash2 className="h-3.5 w-3.5 text-rose-400" />}
+              onClick={() => setDeadCodeModalOpen(true)}
+            >
+              Dead Code
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Bot className="h-3.5 w-3.5 text-violet-400" />}
+              onClick={() => setAskModalOpen(true)}
+            >
+              Ask Codebase
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Network className="h-3.5 w-3.5 text-emerald-400" />}
+              onClick={() => setMermaidModalOpen(true)}
+            >
+              Export Architecture
+            </Button>
+          </div>
+        }
       />
 
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-6">
@@ -308,15 +352,27 @@ export default function IntelligencePage() {
               title={`Relationships · ${selectedNode.id}`}
               actions={
                 selectedNode.kind !== "module" && (
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setSymbolInput(selectedNode.name);
-                      void runSymbolImpact(selectedNode.id);
-                    }}
-                  >
-                    Analyze Impact
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      icon={<FlaskConical className="h-3.5 w-3.5 text-emerald-400" />}
+                      onClick={() => {
+                        setTestgenSymbol(selectedNode.name);
+                        setTestgenOpen(true);
+                      }}
+                    >
+                      Generate Test
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setSymbolInput(selectedNode.name);
+                        void runSymbolImpact(selectedNode.id);
+                      }}
+                    >
+                      Analyze Impact
+                    </Button>
+                  </div>
                 )
               }
               bodyClassName="space-y-4 p-4 text-xs"
@@ -391,6 +447,25 @@ export default function IntelligencePage() {
           )}
         </div>
       </div>
+
+      <ArchitectAskModal open={askModalOpen} onClose={() => setAskModalOpen(false)} />
+      <ArchitectureMermaidModal
+        open={mermaidModalOpen}
+        onClose={() => setMermaidModalOpen(false)}
+      />
+      <TestScaffoldModal
+        open={testgenOpen}
+        onClose={() => setTestgenOpen(false)}
+        defaultSymbol={testgenSymbol}
+      />
+      <CodeReviewModal
+        open={reviewModalOpen}
+        onClose={() => setReviewModalOpen(false)}
+      />
+      <DeadCodeModal
+        open={deadCodeModalOpen}
+        onClose={() => setDeadCodeModalOpen(false)}
+      />
     </>
   );
 }

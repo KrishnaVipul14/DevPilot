@@ -10,19 +10,28 @@ from typing import Any
 import typer
 
 from devpilot import __version__
+from devpilot.ai.architect import ask_codebase
 from devpilot.ai.provider import AIProviderError
+from devpilot.ai.reviewer import generate_pr_description, review_changes
 from devpilot.ai.suggestions import explain_finding, generate_plan
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
+from devpilot.analyzers.dead_code import find_dead_code
+from devpilot.analyzers.mermaid import export_mermaid
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.cli.output import (
     console,
     err_console,
+    print_ask_answer,
+    print_dead_code,
     print_finding_detail,
     print_history,
     print_impact,
     print_patch,
     print_plan,
+    print_pr_description,
+    print_review,
     print_scan_report,
+    print_test_scaffold,
 )
 from devpilot.core.config import (
     DEFAULT_CONFIG_TEMPLATE,
@@ -43,6 +52,7 @@ from devpilot.core.scanner import run_scan
 from devpilot.dashboard_server.server import create_server
 from devpilot.fixes.patch_generator import PatchError, propose_patch
 from devpilot.fixes.patch_manager import apply_patch, discard_patch, verify_patch
+from devpilot.fixes.test_generator import generate_test_scaffold
 from devpilot.integrations.github_ci import (
     format_github_annotation,
     format_markdown_summary,
@@ -112,6 +122,7 @@ def cmd_init(
 @app.command("scan")
 def cmd_scan(
     path: Path = typer.Argument(Path("."), help="Repository path to scan."),
+    demo: bool = typer.Option(False, "--demo", help="Scan the built-in demo repository (examples/demo-app)."),
     offline: bool = typer.Option(False, "--offline", help="Skip network-dependent checks (such as OSV.dev)."),
     json_out: bool = typer.Option(False, "--json", help="Print unified JSON report to stdout."),
     fail_on: str | None = typer.Option(
@@ -121,7 +132,10 @@ def cmd_scan(
     ),
 ) -> None:
     """Run repository analyzers, build the code intelligence graph, and save `.devpilot/reports/latest.json`."""
-    root = path.resolve()
+    if demo:
+        root, _ = _resolve_repo_path(None, demo=True)
+    else:
+        root = path.resolve()
     if not root.is_dir():
         err_console.print(f"[red]Error:[/red] `{root}` is not a directory.")
         raise typer.Exit(2)
@@ -148,20 +162,53 @@ def cmd_scan(
             raise typer.Exit(1)
 
 
+def _resolve_repo_path(path: Path | None, demo: bool = False) -> tuple[Path, bool]:
+    cwd = Path.cwd().resolve()
+    candidates = [
+        cwd / "examples" / "demo-app",
+        Path(__file__).resolve().parent.parent.parent / "examples" / "demo-app",
+    ]
+    demo_dir = next((c.resolve() for c in candidates if c.is_dir()), None)
+
+    if demo:
+        if demo_dir:
+            return demo_dir, True
+        err_console.print("[red]Built-in demo repository `examples/demo-app` not found.[/red]")
+        raise typer.Exit(2)
+
+    if path is None:
+        if demo_dir is not None and ((cwd / "devpilot").is_dir() or cwd == demo_dir.parent.parent):
+            return demo_dir, True
+        return cwd, False
+
+    resolved = path.resolve()
+    if demo_dir and (resolved == demo_dir or (resolved == cwd and (cwd / "devpilot").is_dir())):
+        return demo_dir, True
+    return resolved, False
+
+
 @app.command("dashboard")
 def cmd_dashboard(
-    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    path: Path | None = typer.Option(
+        None, "--path", "-p", help="Target repository directory (defaults to built-in demo-app)."
+    ),
+    demo: bool = typer.Option(False, "--demo", help="Open the built-in demo-app repository."),
     port: int = typer.Option(8765, "--port", help="Local port on 127.0.0.1."),
     open_browser: bool = typer.Option(False, "--open", help="Open the dashboard in the default browser."),
 ) -> None:
     """Launch the local DevPilot dashboard and API server on `http://127.0.0.1:<port>`."""
-    root = path.resolve()
+    root, is_demo = _resolve_repo_path(path, demo=demo)
     url = f"http://127.0.0.1:{port}"
     server = create_server(root, host="127.0.0.1", port=port)
+    repo_label = "[bold cyan]Demo Project (examples/demo-app)[/bold cyan]" if is_demo else f"{root}"
     console.print(
         f"[bold green]DevPilot local dashboard running at[/bold green] [underline]{url}[/underline]\n"
-        f"[dim]Repository: {root}  |  Bound to 127.0.0.1 only  |  Press Ctrl+C to stop[/dim]"
+        f"[dim]Repository: {repo_label}  |  Bound to 127.0.0.1 only  |  Press Ctrl+C to stop[/dim]"
     )
+    if is_demo:
+        console.print(
+            "[dim]Tip: To analyze your own codebase, specify: `devpilot dashboard -p /path/to/your/project`[/dim]"
+        )
     if open_browser:
         webbrowser.open(url)
     try:
@@ -174,11 +221,14 @@ def cmd_dashboard(
 
 @app.command("web", help="Alias for 'dashboard'. Launch the local DevPilot web dashboard.")
 def cmd_web(
-    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    path: Path | None = typer.Option(
+        None, "--path", "-p", help="Target repository directory (defaults to built-in demo-app)."
+    ),
+    demo: bool = typer.Option(False, "--demo", help="Open the built-in demo-app repository."),
     port: int = typer.Option(8765, "--port", help="Local port on 127.0.0.1."),
     open_browser: bool = typer.Option(False, "--open", help="Open the dashboard in the default browser."),
 ) -> None:
-    cmd_dashboard(path=path, port=port, open_browser=open_browser)
+    cmd_dashboard(path=path, demo=demo, port=port, open_browser=open_browser)
 
 
 @app.command("history")
@@ -520,3 +570,128 @@ def cmd_ci(
                 raise typer.Exit(1)
         except ValueError:
             pass
+
+
+@app.command("ask")
+def cmd_ask(
+    question: str = typer.Argument(
+        ..., help="Question about repository architecture, auth, routes, or code flow."
+    ),
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    json_out: bool = typer.Option(False, "--json", help="Output answer as raw JSON."),
+) -> None:
+    """Ask DevPilot Repository Architect questions about codebase flow, endpoints, and architecture."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    res = ask_codebase(ctx, question)
+    if json_out:
+        print(json.dumps(res, indent=2))
+    else:
+        print_ask_answer(res)
+
+
+@app.command("testgen")
+def cmd_testgen(
+    symbol: str = typer.Argument(..., help="Function, method, class, or route to generate unit tests for."),
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    write: bool = typer.Option(False, "--write", "-w", help="Write scaffold to suggested test file."),
+    json_out: bool = typer.Option(False, "--json", help="Output scaffold as JSON."),
+) -> None:
+    """Generate runnable unit test scaffold (pytest / vitest) based on symbol signature and semantics."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    cached = load_latest_graph(root)
+    graph = RepoGraph.from_dict(cached) if cached else RepoGraph.build(ctx)
+    scaffold = generate_test_scaffold(ctx, symbol, graph=graph)
+
+    if write and scaffold.get("success"):
+        target_path = root / scaffold["suggested_test_file"]
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if target_path.exists() and not typer.confirm(
+            f"File {target_path} exists. Overwrite?", default=False
+        ):
+            console.print("[yellow]Skipping file write.[/yellow]")
+        else:
+            target_path.write_text(scaffold["test_code"], encoding="utf-8")
+            console.print(f"[green]Wrote unit test scaffold to:[/green] {target_path}")
+
+    if json_out:
+        print(json.dumps(scaffold, indent=2))
+    else:
+        print_test_scaffold(scaffold)
+
+
+@app.command("mermaid")
+def cmd_mermaid(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Write Mermaid chart to file (.mmd or .md)."
+    ),
+) -> None:
+    """Export the repository's architecture flow as a Mermaid diagram."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    cached = load_latest_graph(root)
+    graph = RepoGraph.from_dict(cached) if cached else RepoGraph.build(ctx)
+    chart = export_mermaid(graph)
+
+    if output:
+        output.write_text(chart, encoding="utf-8")
+        console.print(f"[green]Exported Mermaid diagram to:[/green] {output}")
+    else:
+        print(chart)
+
+
+@app.command("review")
+def cmd_review(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    base: str = typer.Option(
+        "HEAD~1", "--base", "-b", help="Git base ref or commit to diff against (e.g. HEAD~1, main)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output review as raw JSON."),
+) -> None:
+    """Perform automated Staff-Engineer code review on git changes with AST impact analysis."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    cached = load_latest_graph(root)
+    graph = RepoGraph.from_dict(cached) if cached else RepoGraph.build(ctx)
+    review = review_changes(ctx, base=base, graph=graph)
+    if json_out:
+        print(json.dumps(review, indent=2))
+    else:
+        print_review(review)
+
+
+@app.command("pr")
+def cmd_pr(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    base: str = typer.Option(
+        "HEAD~1", "--base", "-b", help="Git base ref or branch to diff against (e.g. main, HEAD~1)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output PR description as raw JSON."),
+) -> None:
+    """Generate high-quality PR title, summary, key changes, and test instructions from git diff."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    res = generate_pr_description(ctx, base=base)
+    if json_out:
+        print(json.dumps(res, indent=2))
+    else:
+        print_pr_description(res)
+
+
+@app.command("deadcode")
+def cmd_deadcode(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    json_out: bool = typer.Option(False, "--json", help="Output dead code report as raw JSON."),
+) -> None:
+    """Find dead, orphaned, or unreferenced functions and classes in the codebase."""
+    root = path.resolve()
+    ctx = RepoContext(root=root, config=load_config(root))
+    cached = load_latest_graph(root)
+    graph = RepoGraph.from_dict(cached) if cached else RepoGraph.build(ctx)
+    results = find_dead_code(ctx, graph=graph)
+    if json_out:
+        print(json.dumps(results, indent=2))
+    else:
+        print_dead_code(results)

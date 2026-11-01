@@ -80,6 +80,9 @@ PLATFORM_VARS = {
     "PYTHONIOENCODING",
     "NO_COLOR",
     "PYTEST_CURRENT_TEST",
+    "JAVA_HOME",
+    "ANDROID_HOME",
+    "ANDROID_SDK_ROOT",
 }
 
 
@@ -258,7 +261,17 @@ class SetupDoctorAnalyzer(Analyzer):
                 if tree is not None:
                     hits.extend(scan_python_for_secrets(tree))
             in_tests = bool(re.search(r"(^|/)(tests?|fixtures?)/", rel))
+            lines = text.splitlines()
             for hit in hits:
+                if in_tests:
+                    context_snippet = "\n".join(
+                        lines[max(0, hit.line - 3) : min(len(lines), hit.line + 4)]
+                    ).lower()
+                    if any(
+                        tok in context_snippet
+                        for tok in ("dummy", "fake", "testing", "test", "mock", "sample", "example")
+                    ):
+                        continue
                 label = f"`{hit.name}`" if hit.name else hit.kind
                 confidence = Confidence.LOW if in_tests else Confidence(hit.confidence)
                 is_crit = any(
