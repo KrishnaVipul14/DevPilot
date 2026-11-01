@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# DevPilot Quick Launcher
+# DevPilot Quick Launcher (Linux / macOS / Windows Git Bash / WSL)
 # Automatically sets up the environment, validates dependencies, runs an initial
 # scan if needed, and launches the DevPilot local web dashboard.
 # ==============================================================================
@@ -27,9 +27,14 @@ echo ""
 
 # 1. Locate compatible Python (3.10+)
 PYTHON_BIN=""
-for cmd in python3 python; do
+for cmd in python3 python py; do
     if command -v "$cmd" >/dev/null 2>&1; then
-        if "$cmd" -c 'import sys; exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+        if [ "$cmd" = "py" ]; then
+            if py -3 -c 'import sys; exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+                PYTHON_BIN="py -3"
+                break
+            fi
+        elif "$cmd" -c 'import sys; exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
             PYTHON_BIN="$cmd"
             break
         fi
@@ -42,7 +47,7 @@ if [ -z "$PYTHON_BIN" ]; then
     exit 1
 fi
 
-PY_VERSION=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')
+PY_VERSION=$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>/dev/null | tr -d '\r')
 echo -e "${GREEN}✓ Found Python ${PY_VERSION} (${PYTHON_BIN})${NC}"
 
 # 2. Check / Create Virtual Environment
@@ -54,21 +59,33 @@ fi
 
 if [ ! -d "$VENV_DIR" ]; then
     echo -e "${CYAN}→ Creating virtual environment in .venv...${NC}"
-    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    $PYTHON_BIN -m venv .venv
     echo -e "${GREEN}✓ Virtual environment created.${NC}"
+    if [ -d "$VENV_DIR/Scripts" ]; then
+        VENV_BIN="$VENV_DIR/Scripts"
+    fi
 fi
 
 # 3. Activate Virtual Environment
 if [ -f "$VENV_BIN/activate" ]; then
     # shellcheck disable=SC1091
     source "$VENV_BIN/activate"
+elif [ -f "$VENV_BIN/activate.bat" ] || [ -d "$VENV_BIN" ]; then
+    export PATH="$VENV_BIN:$PATH"
 else
     echo -e "${RED}Error: Could not locate virtual environment activation script in ${VENV_BIN}.${NC}"
     exit 1
 fi
 
+export PATH="$VENV_BIN:$PATH"
+
 # 4. Check DevPilot Installation
-if ! command -v devpilot >/dev/null 2>&1; then
+DEVPILOT_CMD="devpilot"
+if [ -f "$VENV_BIN/devpilot.exe" ]; then
+    DEVPILOT_CMD="$VENV_BIN/devpilot.exe"
+fi
+
+if ! command -v "$DEVPILOT_CMD" >/dev/null 2>&1 && ! command -v devpilot >/dev/null 2>&1; then
     echo -e "${CYAN}→ Installing DevPilot into virtual environment...${NC}"
     python -m pip install --upgrade pip setuptools wheel -q
     python -m pip install -e ".[dev]" -q
@@ -81,7 +98,7 @@ if [ $# -gt 0 ]; then
         scan)
             shift
             echo -e "${CYAN}→ Running DevPilot scan...${NC}"
-            exec devpilot scan "${@:-.}"
+            exec "$DEVPILOT_CMD" scan "${@:-.}"
             ;;
         test)
             shift
@@ -97,12 +114,12 @@ if [ $# -gt 0 ]; then
             shift
             echo -e "${CYAN}→ Scanning demo application...${NC}"
             cd "$SCRIPT_DIR/examples/demo-app"
-            exec devpilot scan . "$@"
+            exec "$DEVPILOT_CMD" scan . "$@"
             ;;
         dashboard)
             shift
             echo -e "${CYAN}→ Starting DevPilot local dashboard...${NC}"
-            exec devpilot dashboard --open "$@"
+            exec "$DEVPILOT_CMD" dashboard --open "$@"
             ;;
         help|--help|-h)
             echo -e "Usage: ./start.sh [command] [args...]"
@@ -120,7 +137,7 @@ if [ $# -gt 0 ]; then
             exit 0
             ;;
         *)
-            exec devpilot "$@"
+            exec "$DEVPILOT_CMD" "$@"
             ;;
     esac
 fi
@@ -128,7 +145,7 @@ fi
 # Default behavior: run initial scan if no report exists, then open dashboard
 if [ ! -f "$SCRIPT_DIR/.devpilot/reports/latest.json" ]; then
     echo -e "${CYAN}→ No previous scan report found. Running initial scan...${NC}"
-    devpilot scan .
+    "$DEVPILOT_CMD" scan .
     echo ""
 fi
 
@@ -136,4 +153,4 @@ echo -e "${GREEN}✓ Launching DevPilot dashboard...${NC}"
 echo -e "${YELLOW}→ URL: http://127.0.0.1:8765${NC}"
 echo -e "${YELLOW}→ Press Ctrl+C to stop.${NC}"
 echo ""
-exec devpilot dashboard --open
+exec "$DEVPILOT_CMD" dashboard --open

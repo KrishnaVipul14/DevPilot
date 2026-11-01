@@ -41,7 +41,26 @@ DETECT  →  UNDERSTAND  →  ANALYZE IMPACT  →  PRIORITIZE  →  FIX  →  VE
 
 *(Node.js is **not** required to use DevPilot or the dashboard — the built dashboard files are already bundled inside the Python package. You only need Node.js if you want to edit the React frontend code.)*
 
-### 2. Install
+### 2. Instant 1-Command Launchers
+
+DevPilot includes automated start scripts that create the `.venv`, install DevPilot and dependencies, perform an initial scan, and open the web dashboard:
+
+- **Windows (Command Prompt / Explorer Double-Click):**
+  ```cmd
+  start.bat
+  ```
+- **Windows (PowerShell):**
+  ```powershell
+  .\start.ps1
+  ```
+- **macOS / Linux / Git Bash:**
+  ```bash
+  ./start.sh
+  ```
+
+---
+
+### Manual Setup (Optional)
 
 Clone the repo and install it into a virtual environment:
 
