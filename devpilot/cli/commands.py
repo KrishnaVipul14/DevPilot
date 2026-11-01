@@ -172,6 +172,15 @@ def cmd_dashboard(
         server.server_close()
 
 
+@app.command("web", help="Alias for 'dashboard'. Launch the local DevPilot web dashboard.")
+def cmd_web(
+    path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
+    port: int = typer.Option(8765, "--port", help="Local port on 127.0.0.1."),
+    open_browser: bool = typer.Option(False, "--open", help="Open the dashboard in the default browser."),
+) -> None:
+    cmd_dashboard(path=path, port=port, open_browser=open_browser)
+
+
 @app.command("history")
 def cmd_history(
     path: Path = typer.Option(Path("."), "--path", "-p", help="Repository path."),
