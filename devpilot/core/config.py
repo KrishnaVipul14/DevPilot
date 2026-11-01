@@ -30,9 +30,11 @@ DEFAULT_EXCLUDES = [
     ".ruff_cache",
     "build",
     "dist",
+    "out",
     "site-packages",
     ".next",
     ".eggs",
+    "devpilot/dashboard_server/static",
 ]
 
 DEFAULT_RUFF_SELECT = [

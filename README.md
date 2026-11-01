@@ -33,19 +33,20 @@ DETECT  →  UNDERSTAND  →  ANALYZE IMPACT  →  PRIORITIZE  →  FIX  →  VE
 
 ---
 
-## Quick Start (2 minutes)
+## Quick Start (Beginner Friendly — 1 Minute)
 
 ### 1. Requirements
-- **Python 3.10 or newer**
+- **Python 3.10 or newer** (check with `python3 --version` or `py --version`)
 - **Git**
 
-*(Node.js is **not** required to use DevPilot or the dashboard — the built dashboard files are already bundled inside the Python package. You only need Node.js if you want to edit the React frontend code.)*
+*(Node.js is **not** required to use DevPilot or view the dashboard — the compiled dashboard is already bundled inside the repository!)*
 
 ### 2. Instant 1-Command Launchers
 
-DevPilot includes automated start scripts that create the `.venv`, install DevPilot and dependencies, perform an initial scan, and open the web dashboard:
+DevPilot includes automated start scripts that automatically create the `.venv`, install DevPilot and dependencies, perform an initial scan, and open the web dashboard:
 
-- **Windows (Command Prompt / Explorer Double-Click):**
+- **Windows (Command Prompt / File Explorer):**
+  Just double-click **`start.bat`** or run:
   ```cmd
   start.bat
   ```
@@ -58,28 +59,29 @@ DevPilot includes automated start scripts that create the `.venv`, install DevPi
   ./start.sh
   ```
 
+Your browser will automatically open to **`http://127.0.0.1:8765`** with your project health score, findings, architecture graph, and action plan!
+
 ---
 
 ### Manual Setup (Optional)
 
-Clone the repo and install it into a virtual environment:
+If you prefer setting up manually in your terminal:
 
 ```bash
-git clone https://github.com/KrishnaVipul14/DevPilot.git
+git clone https://github.com/algospider/DevPilot.git
 cd DevPilot
 
-# Create a virtual environment
-python -m venv .venv
-
-# Activate it (Windows PowerShell)
-.\.venv\Scripts\Activate.ps1
-
-# Activate it (macOS / Linux)
-# source .venv/bin/activate
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate       # On Windows: .\.venv\Scripts\activate
 
 # Install DevPilot
 pip install --upgrade pip setuptools wheel
 pip install -e ".[dev]"
+
+# Scan current directory and open dashboard
+devpilot scan .
+devpilot dashboard --open
 ```
 
 ### 3. Scan a project and open the dashboard
@@ -101,23 +103,25 @@ Now open **http://127.0.0.1:8765** in your browser. Whenever you run `devpilot s
 
 ---
 
-## Setting up AI (Optional — Powered by Groq)
+## Setting up AI (Optional — Groq & Google Gemini)
 
-DevPilot works completely fine **without** an API key. All scanning, dependency checks, impact analysis, history tracking, action plans, and Ruff/manifest auto-fixes work offline.
+DevPilot works 100% fine **without** an AI key. All code scanning, dependency security checks, blast radius analysis, history tracking, action plans, and auto-fixes work offline.
 
-If you want AI explanations (`devpilot explain`), AI action plans, and AI-generated code patches, put your Groq API key (`GROQ_API_KEY`) in a `.env` file in the project root or export it in your shell:
+If you want AI explanations (`devpilot explain`), AI action plans, and AI-assisted code patches:
 
-```bash
-# Windows PowerShell
-$env:GROQ_API_KEY="your-groq-api-key"
-
-# macOS / Linux
-export GROQ_API_KEY="your-groq-api-key"
-```
+1. **Via Web Dashboard (Easiest):**
+   - Click **`AI Config`** in the bottom-left sidebar of the dashboard (or press `⌘K` / `Ctrl+K`).
+   - Select **Groq** or **Gemini**, paste your free API key, and click Save. DevPilot will remember it automatically!
+2. **Via Environment File (`.env`):**
+   ```bash
+   GROQ_API_KEY="your-groq-api-key"
+   # or
+   GEMINI_API_KEY="your-gemini-api-key"
+   ```
 
 **Privacy & safety with AI:**
 - DevPilot **never** scans or uploads `.env` files or private keys.
-- Any secret-looking string in code is redacted before anything is sent to Groq.
+- Any secret-looking string in code is redacted before anything is sent to the AI provider.
 - Only the small code snippet around the finding is sent — never your whole repository.
 
 ---
