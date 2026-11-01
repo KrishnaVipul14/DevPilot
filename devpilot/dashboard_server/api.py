@@ -77,6 +77,9 @@ class LocalAPI:
     def _ctx(self) -> RepoContext:
         return RepoContext(root=self.root, config=load_config(self.root))
 
+    def _is_demo(self) -> bool:
+        return self.root.name == "demo-app" or "examples/demo-app" in str(self.root)
+
     def get_status(self) -> dict[str, Any]:
         cfg = load_config(self.root)
         st = get_ai_provider(cfg).status()
@@ -84,7 +87,7 @@ class LocalAPI:
         has_report = rpath.is_file()
         mtime = rpath.stat().st_mtime if has_report else None
         report = load_latest_report(self.root, refresh_from_memory=False) if has_report else None
-        is_demo = self.root.name == "demo-app" or "examples/demo-app" in str(self.root)
+        is_demo = self._is_demo()
         repo_name = "Demo Project" if is_demo else self.root.name
         return {
             "has_report": has_report,
@@ -107,6 +110,9 @@ class LocalAPI:
     def get_report(self) -> dict[str, Any]:
         report = load_latest_report(self.root, refresh_from_memory=True)
         if report is None:
+            if self._is_demo():
+                rep = run_scan(self.root, config=load_config(self.root))
+                return rep.model_dump(mode="json")
             raise APIHTTPError(404, "No scan report found. Run `devpilot scan .` first.")
         return report.model_dump(mode="json")
 
@@ -116,6 +122,8 @@ class LocalAPI:
     def get_graph(self) -> dict[str, Any]:
         g = load_latest_graph(self.root)
         if g is None:
+            if self._is_demo():
+                return RepoGraph.build(self._ctx()).to_dict()
             raise APIHTTPError(404, "No repository graph found. Run `devpilot scan .` first.")
         return g
 
