@@ -1,0 +1,56 @@
+name: "DevPilot Repository Intelligence & PR Impact"
+description: "Run DevPilot static analyzers, dependency audit, setup doctor, doc-drift detection, and Git PR change-impact analysis."
+author: "DevPilot"
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  path:
+    description: "Target repository directory to analyze."
+    required: false
+    default: "."
+  base:
+    description: "Base Git ref for pull-request diff impact analysis."
+    required: false
+    default: "HEAD~1"
+  fail-on:
+    description: "Fail workflow if any finding has at least this severity (critical, high, medium, low, none)."
+    required: false
+    default: "critical"
+  offline:
+    description: "Run in offline mode (skip OSV.dev network requests)."
+    required: false
+    default: "false"
+  python-version:
+    description: "Python version to install."
+    required: false
+    default: "3.11"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install DevPilot
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "${{ github.action_path }}/.."
+
+    - name: Run DevPilot Scan & Change Impact Analysis
+      shell: bash
+      env:
+        DEVPILOT_PATH: ${{ inputs.path }}
+        DEVPILOT_BASE: ${{ inputs.base }}
+        DEVPILOT_FAIL_ON: ${{ inputs.fail-on }}
+        DEVPILOT_OFFLINE: ${{ inputs.offline }}
+      run: |
+        OFFLINE_FLAG=""
+        if [ "$DEVPILOT_OFFLINE" = "true" ]; then
+          OFFLINE_FLAG="--offline"
+        fi
+        devpilot ci "$DEVPILOT_PATH" --base "$DEVPILOT_BASE" --fail-on "$DEVPILOT_FAIL_ON" $OFFLINE_FLAG

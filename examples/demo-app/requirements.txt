@@ -1,0 +1,5 @@
+# Demo application dependencies (pinned for OSV.dev advisory verification)
+requests==2.25.0
+pyyaml==5.3.1
+urllib3==1.26.4
+pytest==8.2.0
