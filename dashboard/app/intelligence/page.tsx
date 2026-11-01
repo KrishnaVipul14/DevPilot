@@ -7,6 +7,7 @@ import { Badge, InferredTag, RiskBadge } from "@/components/ui/Badge";
 import { Button, Spinner } from "@/components/ui/Button";
 import { Card, PageHeader, Stat } from "@/components/ui/Card";
 import { CommandLine, EmptyState, ErrorBanner, NoScanState } from "@/components/ui/States";
+import { RouteExplorer } from "@/components/intelligence/RouteExplorer";
 import { api, errorMessage } from "@/lib/api";
 import { fileLoc } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -253,6 +254,11 @@ export default function IntelligencePage() {
           </EmptyState>
         )}
       </Card>
+
+      {/* Multi-Framework API Route Explorer */}
+      <div className="mb-5">
+        <RouteExplorer nodes={graph.nodes} />
+      </div>
 
       {/* Interactive Repository Graph Explorer */}
       <div className="grid gap-4 lg:grid-cols-12">

@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   ListChecks,
   Network,
+  Search,
   Settings,
   Sparkles,
   WifiOff,
@@ -19,6 +20,7 @@ import {
 import { useData } from "./DataProvider";
 import { RepositoryModal } from "./modals/RepositoryModal";
 import { SettingsModal } from "./modals/SettingsModal";
+import { QuickCommandPalette } from "./ui/QuickCommandPalette";
 import { relativeTime } from "@/lib/format";
 
 const NAV = [
@@ -39,6 +41,7 @@ export function Sidebar() {
   const { status, connection, justUpdated } = useData();
   const [repoModalOpen, setRepoModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   return (
     <>
@@ -51,6 +54,14 @@ export function Sidebar() {
             <span className="text-sm font-semibold tracking-tight text-zinc-100">DevPilot</span>
           </div>
           <div className="flex items-center gap-1 md:hidden">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              title="Quick Search"
+            >
+              <Search className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={() => setRepoModalOpen(true)}
@@ -68,6 +79,22 @@ export function Sidebar() {
               <Settings className="h-4 w-4" />
             </button>
           </div>
+        </div>
+
+        <div className="mx-3 mb-2 hidden md:block">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="flex w-full items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 text-xs text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <Search className="h-3.5 w-3.5 text-violet-400" />
+              <span>Quick Search…</span>
+            </div>
+            <kbd className="rounded border border-zinc-700 bg-zinc-800 px-1 py-0.2 text-[10px] text-zinc-400 font-mono">
+              ⌘K
+            </kbd>
+          </button>
         </div>
 
         <div className="mx-3 mb-3 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
@@ -149,6 +176,11 @@ export function Sidebar() {
       <SettingsModal
         open={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
+      />
+
+      <QuickCommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
       />
     </>
   );

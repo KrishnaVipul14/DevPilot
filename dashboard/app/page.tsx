@@ -5,6 +5,7 @@ import { Card, PageHeader } from "@/components/ui/Card";
 import { Spinner } from "@/components/ui/Button";
 import { ErrorBanner, NoScanState } from "@/components/ui/States";
 import { HealthTrendChart } from "@/components/charts/HistoryCharts";
+import { QuickActionsBar } from "@/components/overview/QuickActionsBar";
 import {
   AnalyzerList,
   HealthCard,
@@ -39,6 +40,9 @@ export default function OverviewPage() {
         title="Overview"
         description={`${report.repository.name} · ${report.repository.path}`}
       />
+      <div className="mb-4">
+        <QuickActionsBar report={report} />
+      </div>
       <div className="grid gap-4 lg:grid-cols-3">
         <HealthCard report={report} />
         <div className="lg:col-span-2">
