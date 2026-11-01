@@ -35,7 +35,7 @@ def _extract_docstring_params(doc: str) -> set[str]:
     params: set[str] = set(_SPHINX_PARAM_RE.findall(doc))
     m = _GOOGLE_SECTION_RE.search(doc)
     if m:
-        after = doc[m.end():]
+        after = doc[m.end() :]
         lines = after.splitlines()
         param_indent: int | None = None
         for line in lines:
@@ -74,7 +74,9 @@ def _check_call_mismatch(target: dict[str, Any], call: ast.Call) -> str | None:
     if unknown_kw:
         return f"passes unknown keyword argument(s) {', '.join(f'`{k}`' for k in unknown_kw)}"
     if not has_varargs and n_pos > len(pos_params):
-        return f"passes {n_pos} positional arguments, but `{target['name']}` accepts at most {len(pos_params)}"
+        return (
+            f"passes {n_pos} positional arguments, but `{target['name']}` accepts at most {len(pos_params)}"
+        )
     bound = set(pos_params[:n_pos]) | set(kw_names)
     missing_req = [p for p in req_params + list(meta.get("kwonly_required", [])) if p not in bound]
     if missing_req and not (is_method and isinstance(call.func, ast.Name)):
@@ -119,23 +121,37 @@ class DocumentationAnalyzer(Analyzer):
                     actual.add(a.kwarg.arg)
                 stale = sorted(doc_params - actual)
                 if stale:
-                    out.add(Finding(
-                        module=self.name, rule="docstring-stale-param", severity=Severity.LOW,
-                        title=f"Docstring in `{qual}` documents non-existent parameter(s): {', '.join(stale)}",
-                        file=rel, line=node.lineno, symbol=qual,
-                        evidence=(f"Docstring mentions parameter(s) {', '.join(f'`{p}`' for p in stale)}, "
-                                  f"but `{node.name}` accepts ({', '.join(sorted(actual - {'self', 'cls'}))})."),
-                        suggestion="Update the docstring parameters to match the current function signature.",
-                        confidence=Confidence.HIGH,
-                        metadata={"symbol": qual, "stale_params": stale, "actual_params": sorted(actual)},
-                    ), anchor=f"docparam:{qual}:{','.join(stale)}")
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="docstring-stale-param",
+                            severity=Severity.LOW,
+                            title=f"Docstring in `{qual}` documents non-existent parameter(s): {', '.join(stale)}",
+                            file=rel,
+                            line=node.lineno,
+                            symbol=qual,
+                            evidence=(
+                                f"Docstring mentions parameter(s) {', '.join(f'`{p}`' for p in stale)}, "
+                                f"but `{node.name}` accepts ({', '.join(sorted(actual - {'self', 'cls'}))})."
+                            ),
+                            suggestion="Update the docstring parameters to match the current function signature.",
+                            confidence=Confidence.HIGH,
+                            metadata={"symbol": qual, "stale_params": stale, "actual_params": sorted(actual)},
+                        ),
+                        anchor=f"docparam:{qual}:{','.join(stale)}",
+                    )
 
     def _check_fence_block(
-        self, rel: str, text: str, match: re.Match[str], fn_by_name: dict[str, list[dict[str, Any]]], out: AnalyzerOutput
+        self,
+        rel: str,
+        text: str,
+        match: re.Match[str],
+        fn_by_name: dict[str, list[dict[str, Any]]],
+        out: AnalyzerOutput,
     ) -> None:
         lang = (match.group(1) or "").lower()
         code = match.group(2)
-        fence_line = text[:match.start()].count("\n") + 1
+        fence_line = text[: match.start()].count("\n") + 1
         if lang not in ("python", "py"):
             return
         cleaned_lines = []
@@ -148,22 +164,30 @@ class DocumentationAnalyzer(Analyzer):
         try:
             block_tree = ast.parse(cleaned)
         except SyntaxError as exc:
-            out.add(Finding(
-                module=self.name, rule="readme-example-syntax-error", severity=Severity.LOW,
-                title=f"Python example in {rel} has a syntax error",
-                file=rel, line=fence_line + (exc.lineno or 1),
-                evidence=f"SyntaxError in fenced Python block starting at line {fence_line}: {exc.msg}",
-                suggestion="Fix the Python code example in the documentation so it parses cleanly.",
-                confidence=Confidence.MEDIUM,
-            ), anchor=f"md-syntax:{rel}:{fence_line}")
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="readme-example-syntax-error",
+                    severity=Severity.LOW,
+                    title=f"Python example in {rel} has a syntax error",
+                    file=rel,
+                    line=fence_line + (exc.lineno or 1),
+                    evidence=f"SyntaxError in fenced Python block starting at line {fence_line}: {exc.msg}",
+                    suggestion="Fix the Python code example in the documentation so it parses cleanly.",
+                    confidence=Confidence.MEDIUM,
+                ),
+                anchor=f"md-syntax:{rel}:{fence_line}",
+            )
             return
 
         for call in ast.walk(block_tree):
             if not isinstance(call, ast.Call):
                 continue
             fn_name = (
-                call.func.id if isinstance(call.func, ast.Name)
-                else call.func.attr if isinstance(call.func, ast.Attribute)
+                call.func.id
+                if isinstance(call.func, ast.Name)
+                else call.func.attr
+                if isinstance(call.func, ast.Attribute)
                 else None
             )
             if not fn_name or fn_name not in fn_by_name:
@@ -176,16 +200,29 @@ class DocumentationAnalyzer(Analyzer):
             if issue_reason:
                 call_line = fence_line + getattr(call, "lineno", 1)
                 sig = target["meta"].get("signature", f"{fn_name}(...)")
-                out.add(Finding(
-                    module=self.name, rule="readme-outdated-example", severity=Severity.MEDIUM,
-                    title=f"Documentation example calls `{fn_name}()` with outdated signature",
-                    file=rel, line=call_line, symbol=target["name"],
-                    evidence=(f"Example in {rel}:{call_line} {issue_reason}.\n"
-                              f"Actual signature in {target['file']}: `def {sig}`"),
-                    suggestion=f"Update the example in {rel} to match `def {sig}`.",
-                    confidence=Confidence.HIGH,
-                    metadata={"function": target["id"], "signature": sig, "definition_file": target["file"]},
-                ), anchor=f"md-call:{rel}:{fn_name}:{issue_reason}")
+                out.add(
+                    Finding(
+                        module=self.name,
+                        rule="readme-outdated-example",
+                        severity=Severity.MEDIUM,
+                        title=f"Documentation example calls `{fn_name}()` with outdated signature",
+                        file=rel,
+                        line=call_line,
+                        symbol=target["name"],
+                        evidence=(
+                            f"Example in {rel}:{call_line} {issue_reason}.\n"
+                            f"Actual signature in {target['file']}: `def {sig}`"
+                        ),
+                        suggestion=f"Update the example in {rel} to match `def {sig}`.",
+                        confidence=Confidence.HIGH,
+                        metadata={
+                            "function": target["id"],
+                            "signature": sig,
+                            "definition_file": target["file"],
+                        },
+                    ),
+                    anchor=f"md-call:{rel}:{fn_name}:{issue_reason}",
+                )
 
     def _check_markdown_examples(self, ctx: RepoContext, graph: RepoGraph, out: AnalyzerOutput) -> None:
         # Index unique function names in repository (excluding tests and dunder methods)
@@ -194,7 +231,9 @@ class DocumentationAnalyzer(Analyzer):
             if node.kind == "function":
                 short = node.name.rsplit(".", 1)[-1]
                 if not short.startswith("_"):
-                    fn_by_name.setdefault(short, []).append({"id": node.id, "name": node.name, "file": node.file, "meta": node.meta})
+                    fn_by_name.setdefault(short, []).append(
+                        {"id": node.id, "name": node.name, "file": node.file, "meta": node.meta}
+                    )
 
         for rel in ctx.markdown_files:
             text = ctx.read_text(rel)
@@ -222,18 +261,24 @@ class DocumentationAnalyzer(Analyzer):
             for match in _FENCE_RE.finditer(text):
                 lang = (match.group(1) or "").lower()
                 code = match.group(2)
-                fence_line = text[:match.start()].count("\n") + 1
+                fence_line = text[: match.start()].count("\n") + 1
                 if lang in ("bash", "sh", "shell", "zsh", "dotenv", "env", ""):
                     for m in _ENV_ASSIGN_RE.finditer(code):
                         var = m.group(1)
                         if var not in known_vars and "_" in var:
-                            line = fence_line + code[:m.start()].count("\n") + 1
-                            out.add(Finding(
-                                module=self.name, rule="doc-env-not-in-code", severity=Severity.LOW,
-                                title=f"Documented env variable `{var}` is not used in code or .env.example",
-                                file=rel, line=line,
-                                evidence=f"`{var}` appears in a configuration block in {rel}:{line} but was not found in Python code or .env.example.",
-                                suggestion=f"Update {rel} if `{var}` was renamed, or add it to `.env.example`.",
-                                confidence=Confidence.MEDIUM,
-                                metadata={"variable": var},
-                            ), anchor=f"doc-env:{rel}:{var}")
+                            line = fence_line + code[: m.start()].count("\n") + 1
+                            out.add(
+                                Finding(
+                                    module=self.name,
+                                    rule="doc-env-not-in-code",
+                                    severity=Severity.LOW,
+                                    title=f"Documented env variable `{var}` is not used in code or .env.example",
+                                    file=rel,
+                                    line=line,
+                                    evidence=f"`{var}` appears in a configuration block in {rel}:{line} but was not found in Python code or .env.example.",
+                                    suggestion=f"Update {rel} if `{var}` was renamed, or add it to `.env.example`.",
+                                    confidence=Confidence.MEDIUM,
+                                    metadata={"variable": var},
+                                ),
+                                anchor=f"doc-env:{rel}:{var}",
+                            )

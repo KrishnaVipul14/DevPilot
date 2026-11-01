@@ -45,7 +45,7 @@ echo IMPORTANT: Make sure to check "Add Python to PATH" during installation.
 exit /b 1
 
 :python_found
-for /f "tokens=*" %%v in ('%PYTHON_CMD% -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"') do set "PY_VER=%%v"
+for /f "delims=" %%v in ('%PYTHON_CMD% -c "import sys; print(str(sys.version_info[0])+'.'+str(sys.version_info[1])+'.'+str(sys.version_info[2]))"') do set "PY_VER=%%v"
 echo [DevPilot] Found Python %PY_VER% (%PYTHON_CMD%)
 
 rem 2. Check or create virtual environment
@@ -72,8 +72,12 @@ if not exist "%VENV_SCRIPTS%\devpilot.exe" (
     "%VENV_PY%" -m pip install --upgrade pip setuptools wheel -q
     "%VENV_PY%" -m pip install -e ".[dev]" -q
     if errorlevel 1 (
-        echo [ERROR] Failed to install DevPilot dependencies.
-        exit /b 1
+        echo [DevPilot] Trying standard install without optional dev tools...
+        "%VENV_PY%" -m pip install -e . -q
+        if errorlevel 1 (
+            echo [ERROR] Failed to install DevPilot dependencies.
+            exit /b 1
+        )
     )
     echo [DevPilot] DevPilot installed successfully.
 )
@@ -82,42 +86,51 @@ rem 5. Handle Arguments or Launch Default Dashboard
 set "CMD=%~1"
 
 if "%CMD%"=="scan" (
-    shift
     echo [DevPilot] Running scan...
-    if "%~1"=="" (
-        devpilot scan .
+    if "%~2"=="" (
+        call devpilot scan .
     ) else (
-        devpilot scan %*
+        call devpilot %*
     )
     goto :done
 )
 
 if "%CMD%"=="test" (
-    shift
     echo [DevPilot] Running test suite...
-    pytest tests\ -v %*
+    call pytest tests\ -v
     goto :done
 )
 
 if "%CMD%"=="lint" (
-    shift
     echo [DevPilot] Running linter...
-    ruff check devpilot tests %*
+    call ruff check devpilot tests
     goto :done
 )
 
 if "%CMD%"=="demo" (
-    shift
     echo [DevPilot] Scanning demo application...
     cd /d "%SCRIPT_DIR%examples\demo-app"
-    devpilot scan . %*
+    call devpilot scan .
     goto :done
 )
 
 if "%CMD%"=="dashboard" (
-    shift
     echo [DevPilot] Starting local dashboard...
-    devpilot dashboard --open %*
+    if "%~2"=="" (
+        call devpilot dashboard --open
+    ) else (
+        call devpilot %*
+    )
+    goto :done
+)
+
+if "%CMD%"=="web" (
+    echo [DevPilot] Starting local dashboard...
+    if "%~2"=="" (
+        call devpilot web --open
+    ) else (
+        call devpilot %*
+    )
     goto :done
 )
 
@@ -127,14 +140,14 @@ if "%CMD%"=="-h" goto :help
 if "%CMD%"=="/?" goto :help
 
 if not "%CMD%"=="" (
-    devpilot %*
+    call devpilot %*
     goto :done
 )
 
 rem Default behavior: scan if no report exists, then launch dashboard
 if not exist "%SCRIPT_DIR%.devpilot\reports\latest.json" (
     echo [DevPilot] No previous scan report found. Running initial scan...
-    devpilot scan .
+    call devpilot scan .
     echo.
 )
 
@@ -142,7 +155,7 @@ echo [DevPilot] Launching DevPilot dashboard...
 echo [DevPilot] URL: http://127.0.0.1:8765
 echo [DevPilot] Press Ctrl+C to stop.
 echo.
-devpilot dashboard --open
+call devpilot dashboard --open
 goto :done
 
 :help
@@ -150,7 +163,7 @@ echo Usage: start.bat [command] [args...]
 echo.
 echo Commands:
 echo   (default)     Scan repository (if needed) and launch web dashboard
-echo   dashboard     Launch the local web dashboard
+echo   dashboard     Launch the local web dashboard (alias: web)
 echo   scan [path]   Run repository scan
 echo   test          Run pytest automated test suite
 echo   lint          Run Ruff linter checks

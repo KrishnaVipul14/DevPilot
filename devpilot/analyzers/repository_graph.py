@@ -13,6 +13,7 @@ relationships resolved only by method name are marked ``inferred``.
 from __future__ import annotations
 
 import ast
+import re
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -20,7 +21,18 @@ from typing import Any
 
 from devpilot.core.context import RepoContext
 
-ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "route", "api_route", "websocket"}
+ROUTE_METHODS = {
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
+    "head",
+    "options",
+    "route",
+    "api_route",
+    "websocket",
+}
 GRAPH_LIMITATIONS = [
     "Call relationships are derived statically from the AST; dynamic dispatch, reflection and runtime "
     "monkey-patching are not detected.",
@@ -50,7 +62,7 @@ class Edge:
 
 
 def module_name(rel: str) -> str:
-    path = rel.removesuffix(".py")
+    path = rel.replace("\\", "/").removesuffix(".py")
     path = path.removeprefix("src/")
     parts = path.split("/")
     if parts[-1] == "__init__":
@@ -60,7 +72,12 @@ def module_name(rel: str) -> str:
 
 def is_test_file(rel: str) -> bool:
     name = rel.rsplit("/", 1)[-1]
-    return name.startswith("test_") or name.endswith("_test.py") or "/tests/" in f"/{rel}" or name == "conftest.py"
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or "/tests/" in f"/{rel}"
+        or name == "conftest.py"
+    )
 
 
 def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, Any]:
@@ -127,25 +144,146 @@ class RepoGraph:
             mod = module_name(rel)
             idx = _ModuleIndex(mod, rel, tree, rel.endswith("__init__.py"))
             indexes[mod] = idx
-            graph._add(Node(id=mod, kind="module", name=mod, file=rel, line=1, module=mod,
-                            meta={"is_test": is_test_file(rel)}))
+            graph._add(
+                Node(
+                    id=mod,
+                    kind="module",
+                    name=mod,
+                    file=rel,
+                    line=1,
+                    module=mod,
+                    meta={"is_test": is_test_file(rel)},
+                )
+            )
             graph._collect_defs(idx, tree.body, prefix="", parent=mod, test_file=is_test_file(rel))
         for idx in indexes.values():
             graph._collect_imports(idx, indexes)
         method_index = graph._method_name_index()
         for idx in indexes.values():
             _CallVisitor(graph, idx, indexes, method_index).visit(idx.tree)
+        graph._process_jvm_files(ctx)
         graph._dedupe_edges()
         return graph
 
     def _add(self, node: Node) -> None:
         self.nodes[node.id] = node
 
-    def _collect_defs(self, idx: _ModuleIndex, body: list[ast.stmt], prefix: str, parent: str,
-                      test_file: bool, in_test_class: bool = False) -> None:
+    def _process_jvm_files(self, ctx: RepoContext) -> None:
+        pkg_re = re.compile(r"^\s*package\s+([a-zA-Z0-9._]+)", re.MULTILINE)
+        import_re = re.compile(r"^\s*import\s+([a-zA-Z0-9._]+)", re.MULTILINE)
+        class_re = re.compile(
+            r"^\s*(?:open\s+|abstract\s+|data\s+|sealed\s+|internal\s+|public\s+|private\s+|protected\s+)*(?:class|interface|object|enum\s+class)\s+([a-zA-Z0-9_]+)(?:\s*:\s*([^{]+)|\s+extends\s+([^{]+)|\s+implements\s+([^{]+))?",
+            re.MULTILINE,
+        )
+        fun_re = re.compile(
+            r"^\s*(?:override\s+|suspend\s+|public\s+|private\s+|protected\s+|inline\s+|internal\s+)*(?:fun|(?:void|[a-zA-Z0-9_<>\[\]]+)\s+)\s*([a-zA-Z0-9_]+)\s*\([^)]*\)",
+            re.MULTILINE,
+        )
+
+        for rel in ctx.jvm_files:
+            text = ctx.read_text(rel)
+            if not text:
+                continue
+            is_test = is_test_file(rel) or "/test/" in rel or "/androidTest/" in rel
+            stem = rel.rsplit("/", 1)[-1].split(".")[0]
+            pkg_m = pkg_re.search(text)
+            pkg = pkg_m.group(1).strip() if pkg_m else ""
+            mod = f"{pkg}.{stem}" if pkg else stem
+
+            self._add(
+                Node(
+                    id=mod,
+                    kind="module",
+                    name=mod,
+                    file=rel,
+                    line=1,
+                    module=mod,
+                    meta={"is_test": is_test, "lang": "kotlin" if rel.endswith((".kt", ".kts")) else "java"},
+                )
+            )
+
+            for imp in import_re.findall(text):
+                self.edges.append(Edge(mod, imp.strip(), "imports"))
+
+            last_cid: str | None = None
+            for m in class_re.finditer(text):
+                cname = m.group(1).strip()
+                if cname in ("class", "interface", "object"):
+                    continue
+                cid = f"{mod}:{cname}"
+                last_cid = cid
+                line_no = text[: m.start()].count("\n") + 1
+                raw_bases = m.group(2) or m.group(3) or m.group(4) or ""
+                bases = [
+                    b.strip().split("(")[0].strip()
+                    for b in raw_bases.split(",")
+                    if b.strip() and not b.strip().startswith("{")
+                ]
+                is_route = any("Activity" in b for b in bases)
+                kind = "route" if is_route else "class"
+                self._add(
+                    Node(
+                        id=cid,
+                        kind=kind,
+                        name=cname,
+                        file=rel,
+                        line=line_no,
+                        module=mod,
+                        meta={"is_test": is_test, "bases": bases},
+                    )
+                )
+                self.edges.append(Edge(mod, cid, "defines"))
+                for b in bases:
+                    self.edges.append(Edge(cid, b, "extends"))
+
+            for fm in fun_re.finditer(text):
+                fname = fm.group(1).strip()
+                if fname in (
+                    "class",
+                    "interface",
+                    "object",
+                    "package",
+                    "import",
+                    "if",
+                    "while",
+                    "for",
+                    "switch",
+                    "catch",
+                    "return",
+                ):
+                    continue
+                line_no = text[: fm.start()].count("\n") + 1
+                parent_id = last_cid or mod
+                fid = f"{parent_id}.{fname}" if last_cid else f"{mod}:{fname}"
+                f_is_test = is_test or fname.startswith("test")
+                kind = "test" if f_is_test else "function"
+                self._add(
+                    Node(
+                        id=fid,
+                        kind=kind,
+                        name=fname,
+                        file=rel,
+                        line=line_no,
+                        module=mod,
+                        meta={"is_test": f_is_test},
+                    )
+                )
+                self.edges.append(Edge(parent_id, fid, "defines"))
+
+    def _collect_defs(
+        self,
+        idx: _ModuleIndex,
+        body: list[ast.stmt],
+        prefix: str,
+        parent: str,
+        test_file: bool,
+        in_test_class: bool = False,
+    ) -> None:
         for stmt in body:
             if isinstance(stmt, (ast.If, ast.Try)):
-                inner = list(stmt.body) + list(getattr(stmt, "orelse", [])) + list(getattr(stmt, "finalbody", []))
+                inner = (
+                    list(stmt.body) + list(getattr(stmt, "orelse", [])) + list(getattr(stmt, "finalbody", []))
+                )
                 for handler in getattr(stmt, "handlers", []):
                     inner += handler.body
                 self._collect_defs(idx, inner, prefix, parent, test_file, in_test_class)
@@ -162,16 +300,34 @@ class RepoGraph:
                 meta["async"] = isinstance(stmt, ast.AsyncFunctionDef)
                 if is_test:
                     meta["nodeid"] = f"{idx.rel}::{qual.replace('.', '::')}"
-            self._add(Node(id=node_id, kind=kind, name=qual, file=idx.rel, line=stmt.lineno,
-                           end_line=stmt.end_lineno, module=idx.mod, meta=meta))
+            self._add(
+                Node(
+                    id=node_id,
+                    kind=kind,
+                    name=qual,
+                    file=idx.rel,
+                    line=stmt.lineno,
+                    end_line=stmt.end_lineno,
+                    module=idx.mod,
+                    meta=meta,
+                )
+            )
             self.edges.append(Edge(parent, node_id, "defines"))
             idx.defs[qual] = node_id
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._collect_routes(idx, stmt, node_id)
-            self._collect_defs(idx, stmt.body, f"{qual}.", node_id, test_file,
-                               in_test_class=isinstance(stmt, ast.ClassDef) and stmt.name.startswith("Test"))
+            self._collect_defs(
+                idx,
+                stmt.body,
+                f"{qual}.",
+                node_id,
+                test_file,
+                in_test_class=isinstance(stmt, ast.ClassDef) and stmt.name.startswith("Test"),
+            )
 
-    def _collect_routes(self, idx: _ModuleIndex, fn: ast.FunctionDef | ast.AsyncFunctionDef, fn_id: str) -> None:
+    def _collect_routes(
+        self, idx: _ModuleIndex, fn: ast.FunctionDef | ast.AsyncFunctionDef, fn_id: str
+    ) -> None:
         for dec in fn.decorator_list:
             if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
                 continue
@@ -179,7 +335,9 @@ class RepoGraph:
             if attr not in ROUTE_METHODS or not dec.args:
                 continue
             path = dec.args[0]
-            if not (isinstance(path, ast.Constant) and isinstance(path.value, str) and path.value.startswith("/")):
+            if not (
+                isinstance(path, ast.Constant) and isinstance(path.value, str) and path.value.startswith("/")
+            ):
                 continue
             methods = [attr.upper()] if attr not in ("route", "api_route") else ["GET"]
             for kw in dec.keywords:
@@ -187,16 +345,25 @@ class RepoGraph:
                     methods = [str(e.value).upper() for e in kw.value.elts if isinstance(e, ast.Constant)]
             for method in methods:
                 rid = f"route:{method} {path.value}"
-                self._add(Node(id=rid, kind="route", name=f"{method} {path.value}", file=idx.rel,
-                               line=dec.lineno, module=idx.mod,
-                               meta={"method": method, "path": path.value, "handler": fn_id}))
+                self._add(
+                    Node(
+                        id=rid,
+                        kind="route",
+                        name=f"{method} {path.value}",
+                        file=idx.rel,
+                        line=dec.lineno,
+                        module=idx.mod,
+                        meta={"method": method, "path": path.value, "handler": fn_id},
+                    )
+                )
                 self.edges.append(Edge(rid, fn_id, "routes_to"))
 
     def _collect_imports(self, idx: _ModuleIndex, indexes: dict[str, _ModuleIndex]) -> None:
+        pkg = idx.package()
         for node in ast.walk(idx.tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    target = self._longest_module(alias.name, indexes)
+                    target = self._longest_module(alias.name, indexes, pkg)
                     if alias.asname:
                         idx.aliases[alias.asname] = alias.name
                     else:
@@ -205,7 +372,7 @@ class RepoGraph:
                         self.edges.append(Edge(idx.mod, target, "imports"))
             elif isinstance(node, ast.ImportFrom):
                 base = idx.resolve_relative(node.module, node.level)
-                base_mod = self._longest_module(base, indexes) if base else None
+                base_mod = self._longest_module(base, indexes, pkg) if base else None
                 for alias in node.names:
                     if alias.name == "*":
                         continue
@@ -215,17 +382,24 @@ class RepoGraph:
                         idx.aliases[local] = sub
                         self.edges.append(Edge(idx.mod, sub, "imports"))
                     else:
-                        idx.aliases[local] = f"{base}:{alias.name}"
+                        idx.aliases[local] = f"{base_mod or base}:{alias.name}" if base else alias.name
                         if base_mod:
                             self.edges.append(Edge(idx.mod, base_mod, "imports"))
 
     @staticmethod
-    def _longest_module(name: str, indexes: dict[str, _ModuleIndex]) -> str | None:
+    def _longest_module(name: str, indexes: dict[str, _ModuleIndex], current_pkg: str = "") -> str | None:
         parts = name.split(".")
         for i in range(len(parts), 0, -1):
             cand = ".".join(parts[:i])
             if cand in indexes:
                 return cand
+        if current_pkg:
+            combined = f"{current_pkg}.{name}"
+            c_parts = combined.split(".")
+            for i in range(len(c_parts), 0, -1):
+                cand = ".".join(c_parts[:i])
+                if cand in indexes:
+                    return cand
         return None
 
     def _method_name_index(self) -> dict[str, list[str]]:
@@ -298,21 +472,34 @@ class RepoGraph:
         """Find definitions by id, qualified name or short name."""
         if name in self.nodes:
             return [self.nodes[name]]
-        return [n for n in self.nodes.values() if n.kind in ("function", "class", "test")
-                and (n.name == name or n.name.rsplit(".", 1)[-1] == name)]
+        return [
+            n
+            for n in self.nodes.values()
+            if n.kind in ("function", "class", "test")
+            and (n.name == name or n.name.rsplit(".", 1)[-1] == name)
+        ]
 
     def summary(self) -> dict[str, int]:
         counts = {"modules": 0, "functions": 0, "classes": 0, "routes": 0, "tests": 0}
-        key = {"module": "modules", "function": "functions", "class": "classes", "route": "routes", "test": "tests"}
+        key = {
+            "module": "modules",
+            "function": "functions",
+            "class": "classes",
+            "route": "routes",
+            "test": "tests",
+        }
         for n in self.nodes.values():
             counts[key[n.kind]] += 1
         counts["edges"] = len(self.edges)
         return counts
 
     def to_dict(self) -> dict[str, Any]:
-        return {"nodes": [asdict(n) for n in self.nodes.values()],
-                "edges": [asdict(e) for e in self.edges],
-                "summary": self.summary(), "limitations": GRAPH_LIMITATIONS}
+        return {
+            "nodes": [asdict(n) for n in self.nodes.values()],
+            "edges": [asdict(e) for e in self.edges],
+            "summary": self.summary(),
+            "limitations": GRAPH_LIMITATIONS,
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RepoGraph:
@@ -324,8 +511,13 @@ class RepoGraph:
 
 
 class _CallVisitor(ast.NodeVisitor):
-    def __init__(self, graph: RepoGraph, idx: _ModuleIndex, indexes: dict[str, _ModuleIndex],
-                 method_index: dict[str, list[str]]):
+    def __init__(
+        self,
+        graph: RepoGraph,
+        idx: _ModuleIndex,
+        indexes: dict[str, _ModuleIndex],
+        method_index: dict[str, list[str]],
+    ):
         self.g, self.idx, self.indexes, self.method_index = graph, idx, indexes, method_index
         self.stack: list[str] = []  # qualified names of enclosing defs
         self.class_stack: list[str] = []

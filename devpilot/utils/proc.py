@@ -49,13 +49,22 @@ def run(
             shell=False,
         )
         return ProcResult(
-            list(args), proc.returncode, proc.stdout or "", proc.stderr or "",
+            list(args),
+            proc.returncode,
+            proc.stdout or "",
+            proc.stderr or "",
             int((time.monotonic() - start) * 1000),
         )
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
         err = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return ProcResult(list(args), -1, out, err + f"\nTimed out after {timeout}s",
-                          int((time.monotonic() - start) * 1000), timed_out=True)
+        return ProcResult(
+            list(args),
+            -1,
+            out,
+            err + f"\nTimed out after {timeout}s",
+            int((time.monotonic() - start) * 1000),
+            timed_out=True,
+        )
     except FileNotFoundError as exc:
         return ProcResult(list(args), 127, "", str(exc), int((time.monotonic() - start) * 1000))

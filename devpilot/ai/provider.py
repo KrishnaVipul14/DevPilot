@@ -36,7 +36,15 @@ class AIProvider(ABC):
 
 
 def get_ai_provider(config: DevPilotConfig) -> AIProvider:
-    if config.ai.provider == "gemini":
+    provider = config.ai.provider
+    env_provider = os.environ.get("DEVPILOT_AI_PROVIDER", "").strip().lower()
+    if not env_provider:
+        has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        has_groq = bool(os.environ.get("GROQ_API_KEY"))
+        if has_gemini and not has_groq:
+            provider = "gemini"
+
+    if provider == "gemini":
         from devpilot.ai.gemini import GeminiProvider
 
         return GeminiProvider(config)

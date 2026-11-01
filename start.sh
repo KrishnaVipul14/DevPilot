@@ -116,7 +116,7 @@ if [ $# -gt 0 ]; then
             cd "$SCRIPT_DIR/examples/demo-app"
             exec "$DEVPILOT_CMD" scan . "$@"
             ;;
-        dashboard)
+        dashboard|web)
             shift
             echo -e "${CYAN}→ Starting DevPilot local dashboard...${NC}"
             exec "$DEVPILOT_CMD" dashboard --open "$@"

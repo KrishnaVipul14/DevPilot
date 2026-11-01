@@ -121,7 +121,7 @@ switch ($Command) {
         & devpilot scan . @RemainingArgs
         exit $LASTEXITCODE
     }
-    "dashboard" {
+    { $_ -in "dashboard", "web" } {
         Write-Host "[DevPilot] Starting local dashboard..." -ForegroundColor Cyan
         & devpilot dashboard --open @RemainingArgs
         exit $LASTEXITCODE

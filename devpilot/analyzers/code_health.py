@@ -17,25 +17,38 @@ from devpilot.utils.proc import run
 
 # Explicit severities for well-known rules; prefixes used as fallback.
 RULE_SEVERITY: dict[str, Severity] = {
-    "F821": Severity.HIGH,      # undefined name
-    "F822": Severity.HIGH,      # undefined name in __all__
-    "F823": Severity.HIGH,      # local variable referenced before assignment
-    "F811": Severity.MEDIUM,    # redefinition of unused name
-    "F401": Severity.LOW,       # unused import
-    "F841": Severity.LOW,       # unused local variable
-    "F541": Severity.LOW,       # f-string without placeholders
+    "F821": Severity.HIGH,  # undefined name
+    "F822": Severity.HIGH,  # undefined name in __all__
+    "F823": Severity.HIGH,  # local variable referenced before assignment
+    "F811": Severity.MEDIUM,  # redefinition of unused name
+    "F401": Severity.LOW,  # unused import
+    "F841": Severity.LOW,  # unused local variable
+    "F541": Severity.LOW,  # f-string without placeholders
     "F403": Severity.LOW,
     "F405": Severity.MEDIUM,
-    "F632": Severity.HIGH,      # is-literal comparison
-    "F701": Severity.HIGH, "F702": Severity.HIGH, "F704": Severity.HIGH, "F706": Severity.HIGH,
-    "S102": Severity.HIGH, "S307": Severity.HIGH, "S602": Severity.HIGH, "S506": Severity.HIGH,
-    "B006": Severity.MEDIUM, "B008": Severity.MEDIUM, "B904": Severity.LOW, "B007": Severity.LOW,
-    "B905": Severity.LOW, "B028": Severity.LOW,
+    "F632": Severity.HIGH,  # is-literal comparison
+    "F701": Severity.HIGH,
+    "F702": Severity.HIGH,
+    "F704": Severity.HIGH,
+    "F706": Severity.HIGH,
+    "S102": Severity.HIGH,
+    "S307": Severity.HIGH,
+    "S602": Severity.HIGH,
+    "S506": Severity.HIGH,
+    "B006": Severity.MEDIUM,
+    "B008": Severity.MEDIUM,
+    "B904": Severity.LOW,
+    "B007": Severity.LOW,
+    "B905": Severity.LOW,
+    "B028": Severity.LOW,
     "E722": Severity.MEDIUM,
     "C901": Severity.MEDIUM,
 }
 PREFIX_SEVERITY: list[tuple[str, Severity]] = [
-    ("E9", Severity.CRITICAL), ("F", Severity.MEDIUM), ("B", Severity.MEDIUM), ("S", Severity.HIGH),
+    ("E9", Severity.CRITICAL),
+    ("F", Severity.MEDIUM),
+    ("B", Severity.MEDIUM),
+    ("S", Severity.HIGH),
 ]
 
 RULE_TITLES: dict[str, str] = {
@@ -88,13 +101,27 @@ def find_ruff() -> str | None:
     return str(candidate) if candidate.exists() else None
 
 
-def run_ruff_json(ruff: str, root: Path, select: list[str], max_complexity: int,
-                  excludes: list[str], targets: list[str] | None = None) -> list[dict]:
+def run_ruff_json(
+    ruff: str,
+    root: Path,
+    select: list[str],
+    max_complexity: int,
+    excludes: list[str],
+    targets: list[str] | None = None,
+) -> list[dict]:
     args = [
-        ruff, "check", "--output-format", "json", "--exit-zero", "--no-cache",
-        "--select", ",".join(select),
-        "--config", f"lint.mccabe.max-complexity = {int(max_complexity)}",
-        "--config", 'lint.flake8-bugbear.extend-immutable-calls = ["typer.Argument", "typer.Option", "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Header"]',
+        ruff,
+        "check",
+        "--output-format",
+        "json",
+        "--exit-zero",
+        "--no-cache",
+        "--select",
+        ",".join(select),
+        "--config",
+        f"lint.mccabe.max-complexity = {int(max_complexity)}",
+        "--config",
+        'lint.flake8-bugbear.extend-immutable-calls = ["typer.Argument", "typer.Option", "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Header"]',
     ]
     if excludes:
         args += ["--extend-exclude", ",".join(excludes)]
@@ -135,10 +162,15 @@ class CodeHealthAnalyzer(Analyzer):
         records = run_ruff_json(ruff, ctx.root, cfg.select, cfg.max_complexity, excludes)
         allowed = set(ctx.python_files)
         for rec in records:
-            try:
-                rel = Path(rec["filename"]).resolve().relative_to(ctx.root.resolve()).as_posix()
-            except (KeyError, ValueError):
+            raw_fn = rec.get("filename")
+            if not raw_fn:
                 continue
+            p_fn = Path(raw_fn)
+            abs_fn = p_fn if p_fn.is_absolute() else (ctx.root / p_fn)
+            try:
+                rel = abs_fn.resolve().relative_to(ctx.root.resolve()).as_posix()
+            except ValueError:
+                rel = p_fn.as_posix().replace("\\", "/")
             if rel not in allowed:
                 continue
             code = rec.get("code") or "syntax-error"
@@ -151,15 +183,28 @@ class CodeHealthAnalyzer(Analyzer):
             source_line = ctx.line(rel, row)
             fix = rec.get("fix") or None
             safe_fix = bool(fix and fix.get("applicability") == "safe" and fix.get("edits"))
-            title = RULE_TITLES.get(code, message.split(":")[0][:80] if code != "syntax-error" else "Syntax error")
+            title = RULE_TITLES.get(
+                code, message.split(":")[0][:80] if code != "syntax-error" else "Syntax error"
+            )
             evidence = f"{code}: {message}"
             if source_line.strip():
                 evidence += f"\n  {row} | {source_line.strip()}"
             finding = Finding(
-                module=self.name, rule=code, severity=severity, title=title, file=rel,
-                line=row, end_line=end_row, column=col, symbol=symbol, evidence=evidence,
-                suggestion=RULE_SUGGESTIONS.get(code, (fix or {}).get("message") or "Review and fix the reported issue."),
-                confidence=Confidence.HIGH, fixable=safe_fix,
+                module=self.name,
+                rule=code,
+                severity=severity,
+                title=title,
+                file=rel,
+                line=row,
+                end_line=end_row,
+                column=col,
+                symbol=symbol,
+                evidence=evidence,
+                suggestion=RULE_SUGGESTIONS.get(
+                    code, (fix or {}).get("message") or "Review and fix the reported issue."
+                ),
+                confidence=Confidence.HIGH,
+                fixable=safe_fix,
                 references=[rec["url"]] if rec.get("url") else [],
                 metadata={"engine": "ruff", "fix": fix} if fix else {"engine": "ruff"},
             )
@@ -176,23 +221,40 @@ class CodeHealthAnalyzer(Analyzer):
                     continue
                 length = (node.end_lineno or node.lineno) - node.lineno + 1
                 if length > max_lines:
-                    out.add(Finding(
-                        module=self.name, rule="long-function", severity=Severity.LOW,
-                        title="Function is very long", file=rel, line=node.lineno,
-                        end_line=node.end_lineno, symbol=qual,
-                        evidence=f"`{qual}` spans {length} lines (threshold {max_lines}).",
-                        suggestion="Extract cohesive blocks into helper functions to improve readability and testability.",
-                        confidence=Confidence.HIGH, metadata={"engine": "ast", "lines": length},
-                    ), anchor=qual)
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="long-function",
+                            severity=Severity.LOW,
+                            title="Function is very long",
+                            file=rel,
+                            line=node.lineno,
+                            end_line=node.end_lineno,
+                            symbol=qual,
+                            evidence=f"`{qual}` spans {length} lines (threshold {max_lines}).",
+                            suggestion="Extract cohesive blocks into helper functions to improve readability and testability.",
+                            confidence=Confidence.HIGH,
+                            metadata={"engine": "ast", "lines": length},
+                        ),
+                        anchor=qual,
+                    )
                 args = node.args
                 params = [a.arg for a in args.posonlyargs + args.args + args.kwonlyargs]
                 params = [p for p in params if p not in ("self", "cls")]
                 if len(params) > max_params:
-                    out.add(Finding(
-                        module=self.name, rule="too-many-parameters", severity=Severity.LOW,
-                        title="Function has many parameters", file=rel, line=node.lineno,
-                        symbol=qual,
-                        evidence=f"`{qual}` takes {len(params)} parameters (threshold {max_params}).",
-                        suggestion="Group related parameters into a dataclass or configuration object.",
-                        confidence=Confidence.HIGH, metadata={"engine": "ast", "parameters": len(params)},
-                    ), anchor=qual)
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="too-many-parameters",
+                            severity=Severity.LOW,
+                            title="Function has many parameters",
+                            file=rel,
+                            line=node.lineno,
+                            symbol=qual,
+                            evidence=f"`{qual}` takes {len(params)} parameters (threshold {max_params}).",
+                            suggestion="Group related parameters into a dataclass or configuration object.",
+                            confidence=Confidence.HIGH,
+                            metadata={"engine": "ast", "parameters": len(params)},
+                        ),
+                        anchor=qual,
+                    )

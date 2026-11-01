@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import urllib.request
@@ -18,10 +19,12 @@ from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.cli.main import app
 from devpilot.core.config import load_config
 from devpilot.core.context import RepoContext, is_sensitive_file
+from devpilot.core.models import Confidence, Finding, Severity
 from devpilot.core.scanner import run_scan
 from devpilot.dashboard_server.server import create_server
 from devpilot.fixes.patch_generator import propose_patch
 from devpilot.fixes.patch_manager import apply_patch, discard_patch, verify_patch
+from devpilot.memory.database import MemoryDB
 from devpilot.memory.fingerprints import compute_fingerprint
 from devpilot.utils import git as gitutil
 
@@ -57,13 +60,17 @@ def test_cvss3_score_and_manifest_parsing() -> None:
 
 def test_stable_fingerprint_line_independence() -> None:
     fp1 = compute_fingerprint("code_health", "F401", "auth.py", "|`json` imported but unused|import json")
-    fp2 = compute_fingerprint("code_health", "F401", "auth.py", "|`json`   imported but unused|import   json  ")
+    fp2 = compute_fingerprint(
+        "code_health", "F401", "auth.py", "|`json`   imported but unused|import   json  "
+    )
     assert fp1 == fp2
 
 
 def test_repository_graph_and_symbol_impact(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
-    shutil.copytree(DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache"))
+    shutil.copytree(
+        DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache")
+    )
     ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
     graph = RepoGraph.build(ctx)
     summary = graph.summary()
@@ -83,7 +90,9 @@ def test_repository_graph_and_symbol_impact(tmp_path: Path) -> None:
 
 def test_scan_memory_fix_verify_lifecycle(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
-    shutil.copytree(DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache"))
+    shutil.copytree(
+        DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache")
+    )
 
     # Initialize git repo so git worktree verification and git impact work end-to-end
     gitutil.git(["init"], cwd=repo)
@@ -145,7 +154,9 @@ def test_scan_memory_fix_verify_lifecycle(tmp_path: Path) -> None:
 
 def test_cli_commands_and_local_api_server(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
-    shutil.copytree(DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache"))
+    shutil.copytree(
+        DEMO_APP, repo, ignore=shutil.ignore_patterns(".devpilot", "__pycache__", ".pytest_cache")
+    )
 
     res_init = runner.invoke(app, ["init", str(repo)])
     assert res_init.exit_code == 0
@@ -299,12 +310,14 @@ def test_settings_and_repository_change_endpoints(tmp_path: Path) -> None:
             assert "ai" in data
 
         # 2. POST /api/settings (update AI provider and keys)
-        update_body = json.dumps({
-            "provider": "gemini",
-            "model": "gemini-1.5-flash",
-            "gemini_api_key": "AIzaSyTestGeminiKey1234",
-            "persist_to_env": False,
-        }).encode("utf-8")
+        update_body = json.dumps(
+            {
+                "provider": "gemini",
+                "model": "gemini-1.5-flash",
+                "gemini_api_key": "AIzaSyTestGeminiKey1234",
+                "persist_to_env": False,
+            }
+        ).encode("utf-8")
         post_req = urllib.request.Request(
             f"{base_url}/api/settings",
             data=update_body,
@@ -352,4 +365,238 @@ def test_settings_and_repository_change_endpoints(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+        for k in ("DEVPILOT_AI_PROVIDER", "DEVPILOT_AI_MODEL", "GEMINI_API_KEY", "GROQ_API_KEY"):
+            os.environ.pop(k, None)
 
+
+def test_new_project_module_discovery_and_ai_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DEVPILOT_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("DEVPILOT_AI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    # Standalone non-git project with nested packages and local sibling imports
+    proj = tmp_path / "standalone_project"
+    (proj / "app").mkdir(parents=True)
+    (proj / "app" / "models.py").write_text("class User:\n    pass\n", encoding="utf-8")
+    (proj / "app" / "services.py").write_text(
+        "from models import User\nimport os\ndef get_user():\n    unused = 123\n    return User()\n",
+        encoding="utf-8",
+    )
+    (proj / ".env").write_text("GROQ_API_KEY=gsk_test_key_from_env_123456\n", encoding="utf-8")
+
+    cfg = load_config(proj)
+    assert cfg.root == proj.resolve()
+
+    # Verify AI provider loaded the key from proj/.env and uses the valid default model
+    from devpilot.ai.provider import get_ai_provider
+
+    provider = get_ai_provider(cfg)
+    assert provider.name == "groq"
+    assert provider.model == "llama-3.3-70b-versatile"
+    status = provider.status()
+    assert status.available is True
+
+    # Scan standalone project
+    report = run_scan(proj, config=cfg, offline=True, persist=True)
+    assert report.summary.files_scanned >= 2
+    assert report.graph is not None
+    assert report.graph.modules >= 2
+
+    # Verify that Ruff findings in an external directory outside cwd are kept (not dropped)
+    rules = {f.rule for f in report.findings}
+    assert "F841" in rules  # unused local variable in services.py
+
+
+def test_android_project_scanning_and_fixes(tmp_path: Path) -> None:
+    android_repo = tmp_path / "my_android_app"
+    (android_repo / "app" / "src" / "main").mkdir(parents=True)
+
+    manifest_xml = """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.insecureapp">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <application
+        android:allowBackup="true"
+        android:debuggable="true"
+        android:usesCleartextTraffic="true"
+        android:label="InsecureApp">
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".PaymentActivity">
+            <intent-filter>
+                <action android:name="com.example.ACTION_PAY" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"""
+    (android_repo / "app" / "src" / "main" / "AndroidManifest.xml").write_text(manifest_xml, encoding="utf-8")
+
+    build_gradle = """plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
+android {
+    compileSdk 33
+    defaultConfig {
+        minSdk 21
+        targetSdk 31
+    }
+    signingConfigs {
+        release {
+            storePassword "hardcoded_keystore_secret"
+        }
+    }
+}
+
+repositories {
+    maven { url 'http://insecure-repo.example.com/maven2' }
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.9.0'
+    implementation 'com.google.code.gson:gson'
+}
+"""
+    (android_repo / "build.gradle").write_text(build_gradle, encoding="utf-8")
+
+    kt_src = """package com.example.insecureapp
+
+import androidx.appcompat.app.AppCompatActivity
+import android.os.Bundle
+import javax.crypto.Cipher
+
+class OrderRepository {
+    fun submitOrder(): Boolean = true
+}
+
+class MainActivity : AppCompatActivity() {
+    private val repo = OrderRepository()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+    }
+
+    fun doSecretAction() {
+        println("Performing action")
+    }
+}
+"""
+    (android_repo / "app" / "src" / "main" / "MainActivity.kt").write_text(kt_src, encoding="utf-8")
+
+    report = run_scan(android_repo, offline=True, persist=True)
+
+    assert report.summary.files_scanned >= 3
+    assert report.graph is not None
+    assert report.graph.modules >= 1
+    assert report.graph.routes >= 1
+    assert report.graph.classes >= 1
+    assert report.graph.functions >= 2
+
+    rules = {f.rule for f in report.findings}
+    assert "android-debuggable" in rules
+    assert "android-cleartext-traffic" in rules
+    assert "android-allow-backup" in rules
+    assert "android-exported-missing" in rules
+    assert "android-dangerous-permission" in rules
+    assert "android-min-sdk-outdated" in rules
+    assert "android-target-sdk-outdated" in rules
+    assert "android-insecure-repo-url" in rules
+    assert "android-hardcoded-keystore-password" in rules
+    assert "android-insecure-cipher" in rules
+
+    unpinned_rules = [
+        f for f in report.findings if f.module == "dependencies" and f.rule == "unpinned-dependencies"
+    ]
+    assert len(unpinned_rules) >= 1
+
+    ctx = RepoContext(root=android_repo, config=load_config(android_repo), offline=True)
+    cleartext_finding = next(f for f in report.findings if f.rule == "android-cleartext-traffic")
+    patch = propose_patch(ctx, cleartext_finding, engine="auto")
+    assert patch["engine"] == "ruff"
+    assert 'android:usesCleartextTraffic="false"' in patch["diff"]
+
+    repo_url_finding = next(f for f in report.findings if f.rule == "android-insecure-repo-url")
+    patch_repo = propose_patch(ctx, repo_url_finding, engine="auto")
+    assert "https://insecure-repo.example.com/maven2" in patch_repo["diff"]
+
+    # Verify and apply Android patch in isolation
+    verified = verify_patch(ctx, patch["patch_id"])
+    assert verified["status"] == "verified"
+    applied = apply_patch(ctx, patch["patch_id"])
+    assert applied["status"] == "applied"
+    updated_xml = (android_repo / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+    assert 'android:usesCleartextTraffic="false"' in updated_xml
+
+
+def test_multilang_dependency_fixes_and_sqlite_resilience(tmp_path: Path) -> None:
+    repo = tmp_path / "polyglot_app"
+    repo.mkdir()
+
+    # 1. SQLite WAL mode resilience
+    db = MemoryDB(repo)
+    with db._connect() as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+
+    # 2. Node.js package.json vulnerability auto-fix and JSON validation
+    pkg_json = '{\n  "name": "sample",\n  "dependencies": {\n    "axios": "0.21.1"\n  }\n}\n'
+    (repo / "package.json").write_text(pkg_json, encoding="utf-8")
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    f_node = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="axios 0.21.1 has known SSRF vulnerability",
+        file="package.json",
+        line=4,
+        evidence="axios 0.21.1",
+        confidence=Confidence.HIGH,
+        metadata={"package": "axios", "installed_version": "0.21.1", "fixed_versions": ["0.21.2"]},
+    )
+    patch_node = propose_patch(ctx, f_node, engine="auto")
+    assert '"axios": "0.21.2"' in patch_node["diff"]
+    ver_node = verify_patch(ctx, patch_node["patch_id"])
+    assert ver_node["status"] == "verified"
+    apply_patch(ctx, patch_node["patch_id"])
+    assert '"axios": "0.21.2"' in (repo / "package.json").read_text(encoding="utf-8")
+
+    # 3. Gradle build.gradle vulnerability auto-fix
+    gradle_file = "dependencies {\n    implementation 'com.squareup.okhttp3:okhttp:4.9.0'\n}\n"
+    (repo / "build.gradle").write_text(gradle_file, encoding="utf-8")
+
+    f_gradle = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="okhttp 4.9.0 has known vulnerability",
+        file="build.gradle",
+        line=2,
+        evidence="okhttp 4.9.0",
+        confidence=Confidence.HIGH,
+        metadata={
+            "package": "com.squareup.okhttp3:okhttp",
+            "installed_version": "4.9.0",
+            "fixed_versions": ["4.9.3"],
+        },
+    )
+    patch_gradle = propose_patch(ctx, f_gradle, engine="auto")
+    assert "'com.squareup.okhttp3:okhttp:4.9.3'" in patch_gradle["diff"]
+    ver_gradle = verify_patch(ctx, patch_gradle["patch_id"])
+    assert ver_gradle["status"] == "verified"
+    apply_patch(ctx, patch_gradle["patch_id"])
+    assert "'com.squareup.okhttp3:okhttp:4.9.3'" in (repo / "build.gradle").read_text(encoding="utf-8")
