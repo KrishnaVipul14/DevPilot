@@ -292,6 +292,117 @@ def parse_package_json(text: str, manifest: str) -> list[Dependency]:
     return deps
 
 
+def parse_cargo_toml(text: str, manifest: str) -> list[Dependency]:
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+    deps: list[Dependency] = []
+    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+        sec_dict = data.get(section, {}) or {}
+        if not isinstance(sec_dict, dict):
+            continue
+        for name, spec in sec_dict.items():
+            if isinstance(spec, str):
+                ver_str = spec.strip()
+            elif isinstance(spec, dict):
+                ver_str = str(spec.get("version", "")).strip()
+            else:
+                ver_str = ""
+            clean_ver = ver_str.lstrip("=^~").strip()
+            is_pinned = bool(re.match(r"^\d+(\.\d+)*", clean_ver))
+            deps.append(
+                Dependency(
+                    name=name,
+                    specifier=ver_str,
+                    version=clean_ver if is_pinned else None,
+                    manifest=manifest,
+                    line=_line_of(text, name),
+                    ecosystem="crates.io",
+                )
+            )
+    return deps
+
+
+_GO_REQ_BLOCK_RE = re.compile(r"^\s*([a-zA-Z0-9.\-_/]+)\s+([a-zA-Z0-9.\-_+]+)", re.MULTILINE)
+_GO_REQ_SINGLE_RE = re.compile(r"^\s*require\s+([a-zA-Z0-9.\-_/]+)\s+([a-zA-Z0-9.\-_+]+)", re.MULTILINE)
+
+
+def parse_go_mod(text: str, manifest: str) -> list[Dependency]:
+    deps: list[Dependency] = []
+    lines = text.splitlines()
+    in_require_block = False
+
+    for idx, line in enumerate(lines, start=1):
+        clean = line.split("//", 1)[0].strip()
+        if not clean:
+            continue
+        if clean.startswith("require ("):
+            in_require_block = True
+            continue
+        if in_require_block:
+            if clean == ")":
+                in_require_block = False
+                continue
+            m = _GO_REQ_BLOCK_RE.match(clean)
+            if m:
+                mod_name, mod_ver = m.group(1), m.group(2)
+                deps.append(
+                    Dependency(
+                        name=mod_name,
+                        specifier=mod_ver,
+                        version=mod_ver.lstrip("v"),
+                        manifest=manifest,
+                        line=idx,
+                        ecosystem="Go",
+                    )
+                )
+            continue
+
+        m_single = _GO_REQ_SINGLE_RE.match(clean)
+        if m_single:
+            mod_name, mod_ver = m_single.group(1), m_single.group(2)
+            deps.append(
+                Dependency(
+                    name=mod_name,
+                    specifier=mod_ver,
+                    version=mod_ver.lstrip("v"),
+                    manifest=manifest,
+                    line=idx,
+                    ecosystem="Go",
+                )
+            )
+
+    return deps
+
+
+def parse_pipfile(text: str, manifest: str) -> list[Dependency]:
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+    deps: list[Dependency] = []
+    for section in ("packages", "dev-packages"):
+        sec_dict = data.get(section, {}) or {}
+        if not isinstance(sec_dict, dict):
+            continue
+        for name, spec in sec_dict.items():
+            ver_str = spec.get("version", "") if isinstance(spec, dict) else str(spec)
+            ver_clean = ver_str.strip().lstrip("=~^ ")
+            is_pinned = bool(re.match(r"^\d+(\.\d+)*", ver_clean)) and "*" not in ver_str
+            deps.append(
+                Dependency(
+                    name=normalize_name(name),
+                    specifier=ver_str,
+                    version=ver_clean if is_pinned else None,
+                    manifest=manifest,
+                    line=_line_of(text, name),
+                    ecosystem="PyPI",
+                )
+            )
+    return deps
+
+
 def _parse_manifest_file(rel: str, text: str) -> list[Dependency]:
     name = rel.rsplit("/", 1)[-1].lower()
     if re.fullmatch(r"requirements.*\.txt", name) or name.endswith("-requirements.txt"):
@@ -308,6 +419,12 @@ def _parse_manifest_file(rel: str, text: str) -> list[Dependency]:
         return parse_pom_xml(text, rel)
     if name == "package.json":
         return parse_package_json(text, rel)
+    if name == "cargo.toml":
+        return parse_cargo_toml(text, rel)
+    if name == "go.mod":
+        return parse_go_mod(text, rel)
+    if name in ("pipfile", "pipfile.lock"):
+        return parse_pipfile(text, rel)
     return []
 
 

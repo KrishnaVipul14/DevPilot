@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
-from devpilot.analyzers.manifests import parse_pyproject, parse_requirements
+from devpilot.analyzers.manifests import discover_dependencies, parse_pyproject, parse_requirements
 from devpilot.analyzers.osv import cvss3_base_score, score_to_label
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.cli.main import app
@@ -713,3 +713,328 @@ MIIEowIBAAKCAQEA0Yq3...
     assert report.summary.by_severity["critical"] >= 1
     # Health score must reflect the 25-point penalty for critical issues
     assert report.summary.health_score <= 75
+
+
+def test_react_project_module_and_env_discovery(tmp_path: Path) -> None:
+    repo = tmp_path / "react_web_app"
+    repo.mkdir()
+
+    # package.json
+    pkg = {
+        "name": "my-react-app",
+        "version": "1.0.0",
+        "dependencies": {
+            "react": "^18.2.0",
+            "react-dom": "^18.2.0",
+        },
+    }
+    (repo / "package.json").write_text(json.dumps(pkg, indent=2), encoding="utf-8")
+
+    # .env.example
+    env_example = """# React & Vite environment variables
+REACT_APP_API_URL=https://api.example.com
+VITE_AUTH_TOKEN=secret-token-here
+REACT_APP_FEATURE_FLAG=true
+STALE_UNUSED_CONFIG=unused_val
+"""
+    (repo / ".env.example").write_text(env_example, encoding="utf-8")
+
+    # src/components/Header.jsx
+    src = repo / "src"
+    src.mkdir()
+    components = src / "components"
+    components.mkdir()
+
+    header_jsx = """
+import React from 'react';
+import './Header.css';
+
+export default function Header({ title }) {
+    return <header><h1>{title}</h1></header>;
+}
+
+export const Navigation = () => {
+    return <nav><a href="/">Home</a></nav>;
+};
+"""
+    (components / "Header.jsx").write_text(header_jsx, encoding="utf-8")
+
+    # src/App.jsx
+    app_jsx = """
+import React, { useState, useEffect } from 'react';
+import Header, { Navigation } from './components/Header';
+import { fetchConfig } from './api';
+
+export class ErrorBoundary extends React.Component {
+    render() {
+        return this.props.children;
+    }
+}
+
+export const App = () => {
+    const apiUrl = process.env.REACT_APP_API_URL;
+    const isFeatureEnabled = process.env['REACT_APP_FEATURE_FLAG'] || 'false';
+    const stripeKey = process.env.REACT_APP_STRIPE_KEY;
+
+    return (
+        <ErrorBoundary>
+            <Header title="React App" />
+            <Navigation />
+            <div>API: {apiUrl}</div>
+        </ErrorBoundary>
+    );
+};
+
+export default App;
+"""
+    (src / "App.jsx").write_text(app_jsx, encoding="utf-8")
+
+    # src/api.ts
+    api_ts = """
+import axios from 'axios';
+
+export async function fetchConfig() {
+    const token = import.meta.env.VITE_AUTH_TOKEN;
+    const client = import.meta.env['VITE_CLIENT_ID'] ?? 'default_client';
+    return { token, client };
+}
+"""
+    (src / "api.ts").write_text(api_ts, encoding="utf-8")
+
+    # Scan the React project
+    report = run_scan(repo, offline=True, persist=True)
+
+    # 1. Module and component discovery assertions
+    assert report.graph is not None
+    # Must discover React modules (Header.jsx, App.jsx, api.ts)
+    assert report.graph.modules >= 3
+    # Must discover functions and React functional components (Header, Navigation, App, fetchConfig)
+    assert report.graph.functions >= 4
+    # Must discover classes (ErrorBoundary)
+    assert report.graph.classes >= 1
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    graph = RepoGraph.build(ctx)
+
+    node_names = {n.name for n in graph.nodes.values()}
+    assert "Header" in node_names
+    assert "Navigation" in node_names
+    assert "App" in node_names
+    assert "fetchConfig" in node_names
+    assert "ErrorBoundary" in node_names
+
+    # Check import edges exist
+    import_edges = [e for e in graph.edges if e.kind == "imports"]
+    assert len(import_edges) >= 2
+
+    # 2. .env.example analysis assertions
+    setup_findings = [f for f in report.findings if f.module == "setup_doctor"]
+    unused_env_findings = [f for f in setup_findings if f.rule == "env-unused-in-code"]
+    unused_vars = {f.metadata.get("variable") for f in unused_env_findings}
+
+    # REACT_APP_API_URL, VITE_AUTH_TOKEN, REACT_APP_FEATURE_FLAG are used in JS/TS!
+    # They MUST NOT be flagged as unused
+    assert "REACT_APP_API_URL" not in unused_vars
+    assert "VITE_AUTH_TOKEN" not in unused_vars
+    assert "REACT_APP_FEATURE_FLAG" not in unused_vars
+
+    # STALE_UNUSED_CONFIG is never used, so it SHOULD be flagged
+    assert "STALE_UNUSED_CONFIG" in unused_vars
+    stale_f = next(f for f in unused_env_findings if f.metadata.get("variable") == "STALE_UNUSED_CONFIG")
+    # Message should refer to JavaScript/TypeScript code, not Python code
+    assert "JavaScript/TypeScript" in stale_f.title
+
+    # REACT_APP_STRIPE_KEY is used in App.jsx without default and missing from .env.example
+    missing_env_findings = [f for f in setup_findings if f.rule == "env-missing-from-example"]
+    missing_vars = {f.metadata.get("variable") for f in missing_env_findings}
+    assert "REACT_APP_STRIPE_KEY" in missing_vars
+
+
+def test_rust_and_go_dependency_parsing_and_autofixes(tmp_path: Path) -> None:
+    repo = tmp_path / "polyglot_systems_repo"
+    repo.mkdir()
+
+    cargo_text = """[package]
+name = "sample-crate"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0.104"
+tokio = { version = "1.20.0", features = ["full"] }
+"""
+    (repo / "Cargo.toml").write_text(cargo_text, encoding="utf-8")
+
+    go_mod_text = """module example.com/my-go-service
+
+go 1.21
+
+require (
+\tgithub.com/gin-gonic/gin v1.7.0
+\tgithub.com/stretchr/testify v1.8.0
+)
+"""
+    (repo / "go.mod").write_text(go_mod_text, encoding="utf-8")
+
+    pyproject_text = """[project]
+name = "my-service"
+version = "0.1.0"
+dependencies = [
+    "requests==2.25.0",
+]
+"""
+    (repo / "pyproject.toml").write_text(pyproject_text, encoding="utf-8")
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    deps = discover_dependencies(ctx)
+
+    by_eco = {}
+    for d in deps:
+        by_eco.setdefault(d.ecosystem, []).append(d)
+
+    assert "crates.io" in by_eco
+    assert any(d.name == "serde" and d.version == "1.0.104" for d in by_eco["crates.io"])
+    assert any(d.name == "tokio" and d.version == "1.20.0" for d in by_eco["crates.io"])
+
+    assert "Go" in by_eco
+    assert any(d.name == "github.com/gin-gonic/gin" and d.version == "1.7.0" for d in by_eco["Go"])
+
+    assert "PyPI" in by_eco
+    assert any(d.name == "requests" and d.version == "2.25.0" for d in by_eco["PyPI"])
+
+    # 1. Propose & apply Cargo.toml bump
+    cargo_finding = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="tokio vulnerable",
+        file="Cargo.toml",
+        line=6,
+        evidence="tokio 1.20.0 vulnerable",
+        confidence=Confidence.HIGH,
+        metadata={"package": "tokio", "installed_version": "1.20.0", "fixed_versions": ["1.28.0"]},
+    )
+    p_cargo = propose_patch(ctx, cargo_finding, engine="auto")
+    assert 'version = "1.28.0"' in p_cargo["diff"]
+    verify_patch(ctx, p_cargo["patch_id"])
+    apply_patch(ctx, p_cargo["patch_id"])
+    assert 'version = "1.28.0"' in (repo / "Cargo.toml").read_text(encoding="utf-8")
+
+    # 2. Propose & apply go.mod bump
+    go_finding = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="gin vulnerable",
+        file="go.mod",
+        line=6,
+        evidence="gin v1.7.0 vulnerable",
+        confidence=Confidence.HIGH,
+        metadata={
+            "package": "github.com/gin-gonic/gin",
+            "installed_version": "1.7.0",
+            "fixed_versions": ["1.9.1"],
+        },
+    )
+    p_go = propose_patch(ctx, go_finding, engine="auto")
+    assert "github.com/gin-gonic/gin v1.9.1" in p_go["diff"]
+    verify_patch(ctx, p_go["patch_id"])
+    apply_patch(ctx, p_go["patch_id"])
+    assert "github.com/gin-gonic/gin v1.9.1" in (repo / "go.mod").read_text(encoding="utf-8")
+
+    # 3. Propose & apply pyproject.toml bump
+    py_finding = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="requests vulnerable",
+        file="pyproject.toml",
+        line=5,
+        evidence="requests==2.25.0 vulnerable",
+        confidence=Confidence.HIGH,
+        metadata={"package": "requests", "installed_version": "2.25.0", "fixed_versions": ["2.31.0"]},
+    )
+    p_py = propose_patch(ctx, py_finding, engine="auto")
+    assert '"requests==2.31.0"' in p_py["diff"]
+    verify_patch(ctx, p_py["patch_id"])
+    apply_patch(ctx, p_py["patch_id"])
+    assert '"requests==2.31.0"' in (repo / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_js_ts_code_health_security_and_multi_language_impact(tmp_path: Path) -> None:
+    repo = tmp_path / "react_sec_repo"
+    repo.mkdir()
+
+    # Create README with documented env var
+    readme_md = """# My React Application
+
+Setup instructions:
+```bash
+export REACT_APP_BACKEND_URL=https://api.myapp.com
+```
+"""
+    (repo / "README.md").write_text(readme_md, encoding="utf-8")
+
+    # src/components/DangerousComponent.jsx
+    src = repo / "src"
+    src.mkdir()
+    comp = src / "components"
+    comp.mkdir()
+
+    js_code = """
+import React from 'react';
+
+export function DangerousViewer({ rawContent }) {
+    // 1. eval injection
+    eval("console.log(rawContent)");
+
+    // 2. new Function injection
+    const dynamicFn = new Function("x", "return x * 2;");
+
+    // 3. Document write
+    document.write("<span>Rendering</span>");
+
+    // 4. Debugger statement
+    debugger;
+
+    const apiUrl = process.env.REACT_APP_BACKEND_URL;
+
+    // 5. dangerouslySetInnerHTML
+    return (
+        <div dangerouslySetInnerHTML={{ __html: rawContent }}>
+            <p>API: {apiUrl}</p>
+        </div>
+    );
+}
+
+export function configureAgent() {
+    return {
+        // 6. Insecure TLS
+        rejectUnauthorized: false
+    };
+}
+"""
+    (comp / "DangerousComponent.jsx").write_text(js_code, encoding="utf-8")
+
+    # Run scan
+    report = run_scan(repo, offline=True, persist=True)
+
+    rules_found = {f.rule for f in report.findings if f.module == "code_health"}
+    assert "js-eval-code-execution" in rules_found
+    assert "js-function-constructor-injection" in rules_found
+    assert "js-insecure-tls" in rules_found
+    assert "react-dangerously-set-inner-html" in rules_found
+    assert "js-document-write" in rules_found
+    assert "js-debugger-statement" in rules_found
+
+    # Check documentation analyzer correctly identified REACT_APP_BACKEND_URL in JS/TS
+    doc_findings = [f for f in report.findings if f.module == "documentation"]
+    assert not any(f.rule == "doc-env-not-in-code" for f in doc_findings)
+
+    # Test multi-language change impact test command suggestions
+    test_files = {"src/__tests__/DangerousComponent.test.jsx", "tests/test_api.py"}
+    changed_files = [{"path": "src/components/DangerousComponent.jsx"}]
+    from devpilot.analyzers.change_impact import _suggest_test_commands
+
+    cmds = _suggest_test_commands(test_files, changed_files)
+    assert any("npm test --" in c for c in cmds)
+    assert any("pytest" in c for c in cmds)

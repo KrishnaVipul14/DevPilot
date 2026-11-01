@@ -7,7 +7,8 @@ import { useData } from "@/components/DataProvider";
 import { AIGeneratedTag, Badge, SeverityBadge, StatusBadge } from "@/components/ui/Badge";
 import { Button, Spinner } from "@/components/ui/Button";
 import { Card, PageHeader } from "@/components/ui/Card";
-import { EmptyState, ErrorBanner, NoScanState } from "@/components/ui/States";
+import { CodeBlock } from "@/components/ui/CodeBlock";
+import { CommandLine, EmptyState, ErrorBanner, NoScanState } from "@/components/ui/States";
 import { api, errorMessage } from "@/lib/api";
 import { SEVERITIES, fileLoc, humanize } from "@/lib/format";
 import type { AIExplanation, Finding } from "@/lib/types";
@@ -172,6 +173,68 @@ function FindingsContent() {
         </select>
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setSeverityFilter("all");
+            setStatusFilter("all");
+          }}
+          className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+            severityFilter === "all"
+              ? "bg-zinc-700 text-white"
+              : "bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          }`}
+        >
+          All ({report.findings.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSeverityFilter("critical")}
+          className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+            severityFilter === "critical"
+              ? "bg-rose-600 text-white"
+              : "bg-zinc-800/60 text-rose-400 hover:bg-rose-950/50"
+          }`}
+        >
+          Critical ({report.summary.by_severity["critical"] ?? 0})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSeverityFilter("high")}
+          className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+            severityFilter === "high"
+              ? "bg-amber-600 text-white"
+              : "bg-zinc-800/60 text-amber-400 hover:bg-amber-950/50"
+          }`}
+        >
+          High ({report.summary.by_severity["high"] ?? 0})
+        </button>
+        <button
+          type="button"
+          onClick={() => setSeverityFilter("medium")}
+          className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+            severityFilter === "medium"
+              ? "bg-blue-600 text-white"
+              : "bg-zinc-800/60 text-blue-400 hover:bg-blue-950/50"
+          }`}
+        >
+          Medium ({report.summary.by_severity["medium"] ?? 0})
+        </button>
+        {report.findings.filter((f) => f.fixable).length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery("");
+              setSeverityFilter("all");
+            }}
+            className="rounded-full border border-emerald-800/60 bg-emerald-950/40 px-2.5 py-0.5 text-xs font-medium text-emerald-300 hover:bg-emerald-900/50 transition-colors"
+          >
+            Auto-Fixable ({report.findings.filter((f) => f.fixable).length})
+          </button>
+        )}
+      </div>
+
       {filtered.length === 0 ? (
         <EmptyState title="No matching findings">
           Adjust your search or severity/module filters.
@@ -245,12 +308,11 @@ function FindingsContent() {
                 </div>
 
                 <div>
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    Deterministic Evidence
-                  </div>
-                  <pre className="overflow-x-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-200">
-                    {selected.evidence}
-                  </pre>
+                  <CodeBlock
+                    code={selected.evidence}
+                    title="Deterministic Evidence"
+                    maxHeight="220px"
+                  />
                 </div>
 
                 {selected.suggestion && (
@@ -261,6 +323,14 @@ function FindingsContent() {
                     <p className="text-sm text-zinc-300">{selected.suggestion}</p>
                   </div>
                 )}
+
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                  <div className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                    <span>CLI Fix Command</span>
+                    <span className="font-mono text-[10px] text-zinc-500">Terminal Safe</span>
+                  </div>
+                  <CommandLine command={`devpilot fix ${selected.id} --apply -y`} />
+                </div>
 
                 {selected.references.length > 0 && (
                   <div>

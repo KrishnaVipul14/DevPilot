@@ -124,6 +124,44 @@ def _upgrade_pom(pkg: str, target_ver: str, orig: str) -> str | None:
     return updated if count > 0 and updated != orig else None
 
 
+def _upgrade_cargo(pkg: str, target_ver: str, orig: str) -> str | None:
+    # Pattern 1: pkg = "1.0.0"
+    p1 = re.compile(rf'(^\s*{re.escape(pkg)}\s*=\s*")[^"]+(")', re.MULTILINE)
+    updated, count = p1.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    if count > 0 and updated != orig:
+        return updated
+    # Pattern 2: pkg = { version = "1.0.0", features = [...] }
+    p2 = re.compile(rf'(^\s*{re.escape(pkg)}\s*=\s*\{{[^}}]*?version\s*=\s*")[^"]+(")', re.MULTILINE)
+    updated, count = p2.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    return updated if count > 0 and updated != orig else None
+
+
+def _upgrade_go_mod(pkg: str, target_ver: str, orig: str) -> str | None:
+    norm_ver = target_ver if target_ver.startswith("v") else f"v{target_ver}"
+    # Pattern 1: require ( pkg v1.0.0 ) or pkg v1.0.0
+    p1 = re.compile(rf"(^\s*{re.escape(pkg)}\s+)[^\s\n]+", re.MULTILINE)
+    updated, count = p1.subn(rf"\g<1>{norm_ver}", orig, count=1)
+    if count > 0 and updated != orig:
+        return updated
+    p2 = re.compile(rf"(require\s+{re.escape(pkg)}\s+)[^\s\n]+", re.MULTILINE)
+    updated, count = p2.subn(rf"\g<1>{norm_ver}", orig, count=1)
+    return updated if count > 0 and updated != orig else None
+
+
+def _upgrade_pyproject(pkg: str, installed: str, target_ver: str, orig: str) -> str | None:
+    # Pattern 1: "pkg==1.0.0" in project.dependencies
+    p1 = re.compile(rf'("{re.escape(pkg)}(?:\[[^\]]*\])?\s*===?\s*)[^",\s]+(")', re.IGNORECASE)
+    updated, count = p1.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    if count > 0 and updated != orig:
+        return updated
+    # Pattern 2: pkg = "1.0.0" in tool.poetry.dependencies
+    p2 = re.compile(rf'(^\s*{re.escape(pkg)}\s*=\s*")[^"]+(")', re.MULTILINE | re.IGNORECASE)
+    updated, count = p2.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    if count > 0 and updated != orig:
+        return updated
+    return None
+
+
 def _fix_vulnerable_dep(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
     if finding.module != "dependencies" or finding.rule != "vulnerable-dependency" or not finding.file:
         return None
@@ -144,6 +182,12 @@ def _fix_vulnerable_dep(ctx: RepoContext, finding: Finding) -> tuple[str, str, s
         updated = _upgrade_gradle(str(pkg), target_ver, orig)
     elif fname.endswith("pom.xml"):
         updated = _upgrade_pom(str(pkg), target_ver, orig)
+    elif fname.endswith("cargo.toml"):
+        updated = _upgrade_cargo(str(pkg), target_ver, orig)
+    elif fname.endswith("go.mod"):
+        updated = _upgrade_go_mod(str(pkg), target_ver, orig)
+    elif fname.endswith("pyproject.toml"):
+        updated = _upgrade_pyproject(str(pkg), str(installed), target_ver, orig)
 
     if updated is not None:
         return (finding.file, orig, updated, f"Upgrade {pkg} to fixed version {target_ver}")

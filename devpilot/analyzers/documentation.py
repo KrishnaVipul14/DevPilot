@@ -17,7 +17,7 @@ import re
 from typing import Any
 
 from devpilot.analyzers.base import Analyzer, AnalyzerOutput, AnalyzerSkipped
-from devpilot.analyzers.envsecrets import env_usages, parse_env_keys
+from devpilot.analyzers.envsecrets import env_usages, js_env_usages, parse_env_keys
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.analyzers.setup_doctor import PLATFORM_VARS
 from devpilot.core.astutil import iter_defs
@@ -89,14 +89,15 @@ class DocumentationAnalyzer(Analyzer):
     description = "Docstring parameter drift, outdated README code examples, and documented env mismatch"
 
     def run(self, ctx: RepoContext) -> AnalyzerOutput:
-        if not ctx.python_files and not ctx.markdown_files:
-            raise AnalyzerSkipped("No Python or Markdown files found")
+        if not ctx.python_files and not ctx.markdown_files and not ctx.js_ts_files:
+            raise AnalyzerSkipped("No source or Markdown files found")
         out = AnalyzerOutput()
         graph = RepoGraph.build(ctx)
         self._check_docstring_params(ctx, out)
         self._check_markdown_examples(ctx, graph, out)
         self._check_documented_env_vars(ctx, out)
-        out.message = f"Checked {len(ctx.python_files)} Python files and {len(ctx.markdown_files)} docs"
+        src_count = len(ctx.python_files) + len(ctx.js_ts_files)
+        out.message = f"Checked {src_count} source files and {len(ctx.markdown_files)} docs"
         return out
 
     def _check_docstring_params(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
@@ -248,6 +249,10 @@ class DocumentationAnalyzer(Analyzer):
             tree = ctx.parse(rel)
             if tree is not None:
                 code_vars.update(u.name for u in env_usages(tree, rel))
+        for rel in ctx.js_ts_files:
+            text = ctx.read_text(rel)
+            if text:
+                code_vars.update(u.name for u in js_env_usages(text, rel))
         root_examples = [f for f in ctx.files if f in ENV_EXAMPLE_NAMES]
         all_examples = [f for f in ctx.files if f.rsplit("/", 1)[-1] in ENV_EXAMPLE_NAMES]
         examples = root_examples or all_examples
@@ -275,7 +280,7 @@ class DocumentationAnalyzer(Analyzer):
                                     title=f"Documented env variable `{var}` is not used in code or .env.example",
                                     file=rel,
                                     line=line,
-                                    evidence=f"`{var}` appears in a configuration block in {rel}:{line} but was not found in Python code or .env.example.",
+                                    evidence=f"`{var}` appears in a configuration block in {rel}:{line} but was not found in application code or .env.example.",
                                     suggestion=f"Update {rel} if `{var}` was renamed, or add it to `.env.example`.",
                                     confidence=Confidence.MEDIUM,
                                     metadata={"variable": var},

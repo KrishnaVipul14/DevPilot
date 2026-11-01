@@ -62,7 +62,24 @@ class Edge:
 
 
 def module_name(rel: str) -> str:
-    path = rel.replace("\\", "/").removesuffix(".py")
+    path = rel.replace("\\", "/")
+    for ext in (
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".kt",
+        ".kts",
+        ".java",
+        ".rs",
+        ".go",
+    ):
+        if path.endswith(ext):
+            path = path[: -len(ext)]
+            break
     path = path.removeprefix("src/")
     parts = path.split("/")
     if parts[-1] == "__init__":
@@ -71,11 +88,24 @@ def module_name(rel: str) -> str:
 
 
 def is_test_file(rel: str) -> bool:
-    name = rel.rsplit("/", 1)[-1]
+    name = rel.rsplit("/", 1)[-1].lower()
     return (
         name.startswith("test_")
-        or name.endswith("_test.py")
+        or name.endswith(
+            (
+                "_test.py",
+                ".test.js",
+                ".test.jsx",
+                ".test.ts",
+                ".test.tsx",
+                ".spec.js",
+                ".spec.jsx",
+                ".spec.ts",
+                ".spec.tsx",
+            )
+        )
         or "/tests/" in f"/{rel}"
+        or "/__tests__/" in f"/{rel}"
         or name == "conftest.py"
     )
 
@@ -347,6 +377,18 @@ class RepoGraph:
                 self.edges.append(Edge(s_id, last_cid, "routes_to"))
 
     def _process_js_ts_files(self, ctx: RepoContext) -> None:
+        import_re = re.compile(
+            r"""(?:^|\s*)(?:import\s+(?:(?:[\w*\s{},$]+from\s+)?['"]([^'"]+)['"])|(?:const|let|var)\s+[\w*\s{},$]+\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\))""",
+            re.MULTILINE,
+        )
+        fun_re = re.compile(
+            r"""(?:^|\s*)(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function\s+([A-Za-z0-9_$]+)|(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>)""",
+            re.MULTILINE,
+        )
+        class_re = re.compile(
+            r"""(?:^|\s*)(?:export\s+(?:default\s+)?)?class\s+([A-Za-z0-9_$]+)(?:\s+extends\s+([A-Za-z0-9_$.]+))?""",
+            re.MULTILINE,
+        )
         express_re = re.compile(
             r"""\b(?:app|router|server)\.(get|post|put|delete|patch|options|head|all)\s*\(\s*['"]([^'"]+)['"]""",
             re.MULTILINE,
@@ -357,59 +399,132 @@ class RepoGraph:
                 continue
             clean_rel = rel.replace("\\", "/")
             mod = clean_rel.rsplit(".", 1)[0]
-            m_app = re.search(r"(?:^|/)app/(.+)/route\.[jt]sx?$", clean_rel)
-            if m_app:
-                sub_path = m_app.group(1)
-                route_path = "/" + re.sub(r"\[([^\]]+)\]", r":\1", sub_path)
-                for http_m in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
-                    if re.search(rf"\bexport\s+(?:async\s+)?function\s+{http_m}\b", text):
-                        rid = f"route:{http_m} {route_path}"
-                        self._add(
-                            Node(
-                                id=rid,
-                                kind="route",
-                                name=f"{http_m} {route_path}",
-                                file=clean_rel,
-                                line=1,
-                                module=mod,
-                                meta={"method": http_m, "path": route_path, "framework": "nextjs"},
-                            )
-                        )
-            elif "/pages/api/" in clean_rel:
-                sub_path = clean_rel.split("/pages/api/", 1)[-1].rsplit(".", 1)[0]
-                if sub_path.endswith("/index"):
-                    sub_path = sub_path.removesuffix("/index")
-                route_path = "/api/" + re.sub(r"\[([^\]]+)\]", r":\1", sub_path)
-                rid = f"route:ALL {route_path}"
-                self._add(
-                    Node(
-                        id=rid,
-                        kind="route",
-                        name=f"ALL {route_path}",
-                        file=clean_rel,
-                        line=1,
-                        module=mod,
-                        meta={"method": "ALL", "path": route_path, "framework": "nextjs"},
-                    )
-                )
+            is_test = is_test_file(clean_rel)
+            is_ts = clean_rel.endswith((".ts", ".tsx"))
 
-            for m in express_re.finditer(text):
-                method = m.group(1).upper()
-                raw_p = m.group(2)
-                norm_p = "/" + raw_p.lstrip("/") if raw_p else "/"
-                rid = f"route:{method} {norm_p}"
-                line_no = text[: m.start()].count("\n") + 1
+            self._add(
+                Node(
+                    id=mod,
+                    kind="module",
+                    name=mod,
+                    file=clean_rel,
+                    line=1,
+                    module=mod,
+                    meta={"is_test": is_test, "lang": "typescript" if is_ts else "javascript"},
+                )
+            )
+
+            for m in import_re.finditer(text):
+                target = (m.group(1) or m.group(2) or "").strip()
+                if target and not target.startswith("."):
+                    self.edges.append(Edge(mod, target, "imports"))
+
+            for cm in class_re.finditer(text):
+                cname = cm.group(1).strip()
+                base = (cm.group(2) or "").strip()
+                cid = f"{mod}:{cname}"
+                line_no = text[: cm.start()].count("\n") + 1
                 self._add(
                     Node(
-                        id=rid,
-                        kind="route",
-                        name=f"{method} {norm_p}",
+                        id=cid,
+                        kind="class",
+                        name=cname,
                         file=clean_rel,
                         line=line_no,
                         module=mod,
-                        meta={"method": method, "path": norm_p, "framework": "express"},
+                        meta={"is_test": is_test, "base": base},
                     )
                 )
+                self.edges.append(Edge(mod, cid, "defines"))
+                if base:
+                    self.edges.append(Edge(cid, base, "extends"))
+
+            for fm in fun_re.finditer(text):
+                fname = (fm.group(1) or fm.group(2) or "").strip()
+                if not fname or fname in (
+                    "if",
+                    "for",
+                    "while",
+                    "switch",
+                    "catch",
+                    "return",
+                    "require",
+                    "import",
+                ):
+                    continue
+                fid = f"{mod}:{fname}"
+                line_no = text[: fm.start()].count("\n") + 1
+                f_is_test = is_test or fname.startswith("test") or fname.startswith("it")
+                kind = "test" if f_is_test else "function"
+                self._add(
+                    Node(
+                        id=fid,
+                        kind=kind,
+                        name=fname,
+                        file=clean_rel,
+                        line=line_no,
+                        module=mod,
+                        meta={"is_test": f_is_test},
+                    )
+                )
+                self.edges.append(Edge(mod, fid, "defines"))
+
+            self._scan_js_ts_routes(clean_rel, mod, text, express_re)
+
+    def _scan_js_ts_routes(self, clean_rel: str, mod: str, text: str, express_re: re.Pattern[str]) -> None:
+        m_app = re.search(r"(?:^|/)app/(.+)/route\.[jt]sx?$", clean_rel)
+        if m_app:
+            sub_path = m_app.group(1)
+            route_path = "/" + re.sub(r"\[([^\]]+)\]", r":\1", sub_path)
+            for http_m in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
+                if re.search(rf"\bexport\s+(?:async\s+)?function\s+{http_m}\b", text):
+                    rid = f"route:{http_m} {route_path}"
+                    self._add(
+                        Node(
+                            id=rid,
+                            kind="route",
+                            name=f"{http_m} {route_path}",
+                            file=clean_rel,
+                            line=1,
+                            module=mod,
+                            meta={"method": http_m, "path": route_path, "framework": "nextjs"},
+                        )
+                    )
+        elif "/pages/api/" in clean_rel:
+            sub_path = clean_rel.split("/pages/api/", 1)[-1].rsplit(".", 1)[0]
+            if sub_path.endswith("/index"):
+                sub_path = sub_path.removesuffix("/index")
+            route_path = "/api/" + re.sub(r"\[([^\]]+)\]", r":\1", sub_path)
+            rid = f"route:ALL {route_path}"
+            self._add(
+                Node(
+                    id=rid,
+                    kind="route",
+                    name=f"ALL {route_path}",
+                    file=clean_rel,
+                    line=1,
+                    module=mod,
+                    meta={"method": "ALL", "path": route_path, "framework": "nextjs"},
+                )
+            )
+
+        for m in express_re.finditer(text):
+            method = m.group(1).upper()
+            raw_p = m.group(2)
+            norm_p = "/" + raw_p.lstrip("/") if raw_p else "/"
+            rid = f"route:{method} {norm_p}"
+            line_no = text[: m.start()].count("\n") + 1
+            self._add(
+                Node(
+                    id=rid,
+                    kind="route",
+                    name=f"{method} {norm_p}",
+                    file=clean_rel,
+                    line=line_no,
+                    module=mod,
+                    meta={"method": method, "path": norm_p, "framework": "express"},
+                )
+            )
 
     def _collect_defs(
         self,

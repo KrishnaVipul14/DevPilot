@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -54,6 +55,12 @@ RULE_SEVERITY: dict[str, Severity] = {
     "B028": Severity.LOW,
     "E722": Severity.MEDIUM,
     "C901": Severity.MEDIUM,
+    "js-eval-code-execution": Severity.CRITICAL,
+    "js-function-constructor-injection": Severity.CRITICAL,
+    "js-insecure-tls": Severity.CRITICAL,
+    "react-dangerously-set-inner-html": Severity.HIGH,
+    "js-document-write": Severity.HIGH,
+    "js-debugger-statement": Severity.LOW,
 }
 PREFIX_SEVERITY: list[tuple[str, Severity]] = [
     ("E9", Severity.CRITICAL),
@@ -173,16 +180,141 @@ class CodeHealthAnalyzer(Analyzer):
 
     def run(self, ctx: RepoContext) -> AnalyzerOutput:
         out = AnalyzerOutput()
-        if not ctx.python_files:
-            raise AnalyzerSkipped("No Python files found")
-        cfg = ctx.config.analyzers.code_health
-        ruff = find_ruff()
-        if ruff is None:
-            out.message = "ruff not found; only AST checks were run"
-        else:
-            self._ruff(ctx, ruff, out)
-        self._ast_checks(ctx, out, cfg.max_function_lines, cfg.max_parameters)
+        if not ctx.python_files and not ctx.js_ts_files:
+            raise AnalyzerSkipped("No Python or JavaScript/TypeScript files found")
+
+        if ctx.python_files:
+            cfg = ctx.config.analyzers.code_health
+            ruff = find_ruff()
+            if ruff is None:
+                out.message = "ruff not found; only AST checks were run"
+            else:
+                self._ruff(ctx, ruff, out)
+            self._ast_checks(ctx, out, cfg.max_function_lines, cfg.max_parameters)
+
+        if ctx.js_ts_files:
+            self._audit_js_ts(ctx, out)
+
         return out
+
+    def _audit_js_ts(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
+        for rel in ctx.js_ts_files:
+            text = ctx.read_text(rel)
+            if not text:
+                continue
+            is_test = bool(re.search(r"(\.test\.|\.spec\.|__tests__/)", rel.lower()))
+            lines = text.splitlines()
+            in_block_comment = False
+            for idx, line in enumerate(lines, start=1):
+                clean = line.strip()
+                if "/*" in clean and "*/" in clean:
+                    clean = re.sub(r"/\*.*?\*/", "", clean).strip()
+                elif "/*" in clean:
+                    in_block_comment = True
+                    clean = clean.split("/*")[0].strip()
+                elif "*/" in clean:
+                    in_block_comment = False
+                    clean = clean.split("*/", 1)[1].strip()
+                elif in_block_comment:
+                    continue
+
+                clean = clean.split("//")[0].strip()
+                if not clean:
+                    continue
+
+                if re.search(r"\beval\s*\(", clean):
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="js-eval-code-execution",
+                            severity=Severity.CRITICAL,
+                            title="Use of eval() introduces arbitrary code execution risks",
+                            file=rel,
+                            line=idx,
+                            evidence=f"`{clean}` in {rel}:{idx}",
+                            suggestion="Avoid eval(); use JSON.parse() or structured logic to prevent arbitrary code injection.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"js-eval:{rel}:{idx}",
+                    )
+                if re.search(r"\bnew\s+Function\s*\(", clean):
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="js-function-constructor-injection",
+                            severity=Severity.CRITICAL,
+                            title="Use of new Function(...) introduces arbitrary code execution risks",
+                            file=rel,
+                            line=idx,
+                            evidence=f"`{clean}` in {rel}:{idx}",
+                            suggestion="Avoid dynamic Function constructors. Restructure using standard functions or closures.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"js-new-fun:{rel}:{idx}",
+                    )
+                if re.search(
+                    r"\brejectUnauthorized\s*:\s*false\b|\bNODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['\"]?0['\"]?",
+                    clean,
+                ):
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="js-insecure-tls",
+                            severity=Severity.CRITICAL,
+                            title="TLS certificate validation disabled (rejectUnauthorized: false)",
+                            file=rel,
+                            line=idx,
+                            evidence=f"`{clean}` in {rel}:{idx}",
+                            suggestion="Never disable TLS certificate validation in production. Configure trusted CA certs instead.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"js-insecure-tls:{rel}:{idx}",
+                    )
+                if "dangerouslySetInnerHTML" in clean:
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="react-dangerously-set-inner-html",
+                            severity=Severity.HIGH,
+                            title="Use of dangerouslySetInnerHTML exposes React components to XSS",
+                            file=rel,
+                            line=idx,
+                            evidence=f"`{clean}` in {rel}:{idx}",
+                            suggestion="Avoid dangerouslySetInnerHTML or sanitize user input using DOMPurify before rendering.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"react-dangerously-set:{rel}:{idx}",
+                    )
+                if re.search(r"\bdocument\.write(?:ln)?\s*\(", clean):
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="js-document-write",
+                            severity=Severity.HIGH,
+                            title="Use of document.write() causes XSS vulnerabilities and performance issues",
+                            file=rel,
+                            line=idx,
+                            evidence=f"`{clean}` in {rel}:{idx}",
+                            suggestion="Use modern DOM methods (textContent, appendChild) or declarative UI components.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"js-doc-write:{rel}:{idx}",
+                    )
+                if not is_test and re.search(r"^\s*debugger\s*;", line):
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="js-debugger-statement",
+                            severity=Severity.LOW,
+                            title="debugger statement left in source code",
+                            file=rel,
+                            line=idx,
+                            evidence=f"`{line.strip()}` in {rel}:{idx}",
+                            suggestion="Remove debugger statements prior to committing or deploying to production.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"js-debugger:{rel}:{idx}",
+                    )
 
     # -- ruff -----------------------------------------------------------------
     def _ruff(self, ctx: RepoContext, ruff: str, out: AnalyzerOutput) -> None:

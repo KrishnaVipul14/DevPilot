@@ -7,7 +7,8 @@ import { useData } from "@/components/DataProvider";
 import { AIGeneratedTag, Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button, Spinner } from "@/components/ui/Button";
 import { Card, PageHeader } from "@/components/ui/Card";
-import { EmptyState, ErrorBanner } from "@/components/ui/States";
+import { CodeBlock } from "@/components/ui/CodeBlock";
+import { CommandLine, EmptyState, ErrorBanner } from "@/components/ui/States";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate, formatDuration } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -188,10 +189,23 @@ function FixesContent() {
 
                 {/* Unified Diff Viewer */}
                 <div>
-                  <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    Proposed Unified Diff
+                  <CodeBlock
+                    code={selected.diff}
+                    isDiff={true}
+                    title={`Unified Diff · ${selected.files.join(", ")}`}
+                    maxHeight="450px"
+                  />
+                </div>
+
+                {/* Direct CLI Execution Snippet */}
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                  <div className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                    <span>Terminal Direct Verification</span>
+                    <span className="font-mono text-[10px] text-zinc-500">Isolated Worktree</span>
                   </div>
-                  <DiffViewer diff={selected.diff} />
+                  <CommandLine
+                    command={`devpilot fix ${selected.finding_id} --verify --apply -y`}
+                  />
                 </div>
 
                 {/* Verification Results */}
@@ -232,30 +246,5 @@ function FixesContent() {
         </div>
       )}
     </>
-  );
-}
-
-function DiffViewer({ diff }: { diff: string }) {
-  const lines = diff.split("\n");
-  return (
-    <pre className="overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-relaxed">
-      {lines.map((line, idx) => {
-        let cls = "text-zinc-300";
-        if (line.startsWith("+++") || line.startsWith("---")) {
-          cls = "text-zinc-400 font-semibold";
-        } else if (line.startsWith("@@")) {
-          cls = "text-violet-400";
-        } else if (line.startsWith("+")) {
-          cls = "bg-emerald-950/50 text-emerald-300";
-        } else if (line.startsWith("-")) {
-          cls = "bg-red-950/50 text-red-300";
-        }
-        return (
-          <div key={idx} className={`px-1 ${cls}`}>
-            {line || " "}
-          </div>
-        );
-      })}
-    </pre>
   );
 }

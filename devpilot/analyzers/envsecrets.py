@@ -63,6 +63,25 @@ def env_usages(tree: ast.AST, rel: str) -> list[EnvUsage]:
     return found
 
 
+_JS_ENV_RE = re.compile(
+    r"""(?:process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\])|import\.meta\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]))"""
+)
+
+
+def js_env_usages(text: str, rel: str) -> list[EnvUsage]:
+    found: list[EnvUsage] = []
+    lines = text.splitlines()
+    for m in _JS_ENV_RE.finditer(text):
+        name = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+        if not name or name in ("NODE_ENV", "PUBLIC_URL"):
+            continue
+        line_no = text[: m.start()].count("\n") + 1
+        line_str = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
+        has_default = any(op in line_str for op in ("||", "??", ":="))
+        found.append(EnvUsage(name, rel, line_no, has_default))
+    return found
+
+
 def parse_env_keys(text: str) -> dict[str, int]:
     keys: dict[str, int] = {}
     for idx, line in enumerate(text.splitlines(), start=1):
