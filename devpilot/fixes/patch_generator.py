@@ -91,26 +91,60 @@ def _fix_ruff(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] |
     return None
 
 
+def _upgrade_requirements(pkg: str, installed: str, target_ver: str, orig: str) -> str | None:
+    pattern = re.compile(
+        rf"^(\s*{re.escape(pkg)}\s*===?\s*){re.escape(installed)}(\b.*)$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    updated, count = pattern.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    return updated if count > 0 and updated != orig else None
+
+
+def _upgrade_package_json(pkg: str, target_ver: str, orig: str) -> str | None:
+    pattern = re.compile(rf'("{re.escape(pkg)}"\s*:\s*")[^"]+(")')
+    updated, count = pattern.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    return updated if count > 0 and updated != orig else None
+
+
+def _upgrade_gradle(pkg: str, target_ver: str, orig: str) -> str | None:
+    pattern = re.compile(rf'([\'"]{re.escape(pkg)}:)[^\'"]+([\'"])')
+    updated, count = pattern.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    return updated if count > 0 and updated != orig else None
+
+
+def _upgrade_pom(pkg: str, target_ver: str, orig: str) -> str | None:
+    aid = pkg.split(":", 1)[1] if ":" in pkg else pkg
+    pattern = re.compile(
+        rf"(<artifactId>{re.escape(aid)}</artifactId>[\s\S]*?<version>)[^<]+(</version>)",
+        re.MULTILINE,
+    )
+    updated, count = pattern.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
+    return updated if count > 0 and updated != orig else None
+
+
 def _fix_vulnerable_dep(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
-    if finding.module == "dependencies" and finding.rule == "vulnerable-dependency" and finding.file:
-        fixes = (finding.metadata or {}).get("fixed_versions") or []
-        pkg = (finding.metadata or {}).get("package")
-        installed = (finding.metadata or {}).get("installed_version")
-        orig = ctx.read_text(finding.file)
-        if fixes and pkg and installed and orig:
-            target_ver = str(fixes[0])
-            pattern = re.compile(
-                rf"^(\s*{re.escape(str(pkg))}\s*===?\s*){re.escape(str(installed))}(\b.*)$",
-                re.IGNORECASE | re.MULTILINE,
-            )
-            updated, count = pattern.subn(rf"\g<1>{target_ver}\g<2>", orig, count=1)
-            if count > 0 and updated != orig:
-                return (
-                    finding.file,
-                    orig,
-                    updated,
-                    f"Upgrade {pkg} from {installed} to fixed version {target_ver}",
-                )
+    if finding.module != "dependencies" or finding.rule != "vulnerable-dependency" or not finding.file:
+        return None
+    fixes = (finding.metadata or {}).get("fixed_versions") or []
+    pkg = (finding.metadata or {}).get("package")
+    installed = (finding.metadata or {}).get("installed_version")
+    orig = ctx.read_text(finding.file)
+    if not (fixes and pkg and installed and orig):
+        return None
+    target_ver = str(fixes[0])
+    fname = finding.file.lower()
+    updated: str | None = None
+    if "requirements" in fname or fname.endswith(".txt"):
+        updated = _upgrade_requirements(str(pkg), str(installed), target_ver, orig)
+    elif fname.endswith("package.json"):
+        updated = _upgrade_package_json(str(pkg), target_ver, orig)
+    elif fname.endswith((".gradle", ".gradle.kts")):
+        updated = _upgrade_gradle(str(pkg), target_ver, orig)
+    elif fname.endswith("pom.xml"):
+        updated = _upgrade_pom(str(pkg), target_ver, orig)
+
+    if updated is not None:
+        return (finding.file, orig, updated, f"Upgrade {pkg} to fixed version {target_ver}")
     return None
 
 
@@ -183,6 +217,50 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
     return None
 
 
+def _apply_search_replace_edits(orig: str, replacements: list[Any]) -> str:
+    updated = orig
+    for item in replacements:
+        if not isinstance(item, dict):
+            continue
+        search = str(item.get("search") or "")
+        replace = str(item.get("replace") or "")
+        if not search:
+            continue
+        if search in updated:
+            updated = updated.replace(search, replace, 1)
+        elif search.strip() in updated:
+            updated = updated.replace(search.strip(), replace.strip(), 1)
+        else:
+            raise PatchError("AI proposed a search block that did not match the exact file contents.")
+    if updated == orig:
+        raise PatchError("Proposed edit produced no changes.")
+    return updated
+
+
+def _validate_updated_syntax(file: str, updated: str) -> None:
+    if file.endswith(".py"):
+        try:
+            ast.parse(updated, filename=file)
+        except SyntaxError as exc:
+            raise PatchError(
+                f"Rejected AI patch because it introduced a Python syntax error: {exc.msg}"
+            ) from exc
+    elif file.endswith(".json"):
+        import json
+
+        try:
+            json.loads(updated)
+        except Exception as exc:  # noqa: BLE001
+            raise PatchError(f"Rejected AI patch because it introduced a JSON syntax error: {exc}") from exc
+    elif file.endswith(".xml"):
+        import xml.etree.ElementTree as ET
+
+        try:
+            ET.fromstring(updated)
+        except Exception as exc:  # noqa: BLE001
+            raise PatchError(f"Rejected AI patch because it introduced an XML syntax error: {exc}") from exc
+
+
 def _try_ai_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str]:
     if not finding.file or is_sensitive_file(finding.file):
         raise PatchError("Finding does not reference a modifiable source file.")
@@ -211,31 +289,8 @@ def _try_ai_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str]
     if not isinstance(replacements, list) or not replacements:
         raise PatchError("AI did not return any valid search/replace edits.")
 
-    updated = orig
-    for item in replacements:
-        if not isinstance(item, dict):
-            continue
-        search = str(item.get("search") or "")
-        replace = str(item.get("replace") or "")
-        if not search:
-            continue
-        if search in updated:
-            updated = updated.replace(search, replace, 1)
-        elif search.strip() in updated:
-            updated = updated.replace(search.strip(), replace.strip(), 1)
-        else:
-            raise PatchError("AI proposed a search block that did not match the exact file contents.")
-
-    if updated == orig:
-        raise PatchError("Proposed edit produced no changes.")
-
-    if finding.file.endswith(".py"):
-        try:
-            ast.parse(updated, filename=finding.file)
-        except SyntaxError as exc:
-            raise PatchError(
-                f"Rejected AI patch because it introduced a Python syntax error: {exc.msg}"
-            ) from exc
+    updated = _apply_search_replace_edits(orig, replacements)
+    _validate_updated_syntax(finding.file, updated)
 
     summary = str(raw.get("summary") or f"AI proposed fix for {finding.id} ({finding.title})")
     return finding.file, orig, updated, summary

@@ -19,10 +19,12 @@ from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.cli.main import app
 from devpilot.core.config import load_config
 from devpilot.core.context import RepoContext, is_sensitive_file
+from devpilot.core.models import Confidence, Finding, Severity
 from devpilot.core.scanner import run_scan
 from devpilot.dashboard_server.server import create_server
 from devpilot.fixes.patch_generator import propose_patch
 from devpilot.fixes.patch_manager import apply_patch, discard_patch, verify_patch
+from devpilot.memory.database import MemoryDB
 from devpilot.memory.fingerprints import compute_fingerprint
 from devpilot.utils import git as gitutil
 
@@ -530,3 +532,71 @@ class MainActivity : AppCompatActivity() {
     repo_url_finding = next(f for f in report.findings if f.rule == "android-insecure-repo-url")
     patch_repo = propose_patch(ctx, repo_url_finding, engine="auto")
     assert "https://insecure-repo.example.com/maven2" in patch_repo["diff"]
+
+    # Verify and apply Android patch in isolation
+    verified = verify_patch(ctx, patch["patch_id"])
+    assert verified["status"] == "verified"
+    applied = apply_patch(ctx, patch["patch_id"])
+    assert applied["status"] == "applied"
+    updated_xml = (android_repo / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+    assert 'android:usesCleartextTraffic="false"' in updated_xml
+
+
+def test_multilang_dependency_fixes_and_sqlite_resilience(tmp_path: Path) -> None:
+    repo = tmp_path / "polyglot_app"
+    repo.mkdir()
+
+    # 1. SQLite WAL mode resilience
+    db = MemoryDB(repo)
+    with db._connect() as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+
+    # 2. Node.js package.json vulnerability auto-fix and JSON validation
+    pkg_json = '{\n  "name": "sample",\n  "dependencies": {\n    "axios": "0.21.1"\n  }\n}\n'
+    (repo / "package.json").write_text(pkg_json, encoding="utf-8")
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    f_node = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="axios 0.21.1 has known SSRF vulnerability",
+        file="package.json",
+        line=4,
+        evidence="axios 0.21.1",
+        confidence=Confidence.HIGH,
+        metadata={"package": "axios", "installed_version": "0.21.1", "fixed_versions": ["0.21.2"]},
+    )
+    patch_node = propose_patch(ctx, f_node, engine="auto")
+    assert '"axios": "0.21.2"' in patch_node["diff"]
+    ver_node = verify_patch(ctx, patch_node["patch_id"])
+    assert ver_node["status"] == "verified"
+    apply_patch(ctx, patch_node["patch_id"])
+    assert '"axios": "0.21.2"' in (repo / "package.json").read_text(encoding="utf-8")
+
+    # 3. Gradle build.gradle vulnerability auto-fix
+    gradle_file = "dependencies {\n    implementation 'com.squareup.okhttp3:okhttp:4.9.0'\n}\n"
+    (repo / "build.gradle").write_text(gradle_file, encoding="utf-8")
+
+    f_gradle = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="okhttp 4.9.0 has known vulnerability",
+        file="build.gradle",
+        line=2,
+        evidence="okhttp 4.9.0",
+        confidence=Confidence.HIGH,
+        metadata={
+            "package": "com.squareup.okhttp3:okhttp",
+            "installed_version": "4.9.0",
+            "fixed_versions": ["4.9.3"],
+        },
+    )
+    patch_gradle = propose_patch(ctx, f_gradle, engine="auto")
+    assert "'com.squareup.okhttp3:okhttp:4.9.3'" in patch_gradle["diff"]
+    ver_gradle = verify_patch(ctx, patch_gradle["patch_id"])
+    assert ver_gradle["status"] == "verified"
+    apply_patch(ctx, patch_gradle["patch_id"])
+    assert "'com.squareup.okhttp3:okhttp:4.9.3'" in (repo / "build.gradle").read_text(encoding="utf-8")

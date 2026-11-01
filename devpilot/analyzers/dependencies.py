@@ -178,7 +178,13 @@ class DependencyAnalyzer(Analyzer):
                 ),
                 suggestion=upgrade + ".",
                 confidence=confidence,
-                fixable=bool(fixes and "requirements" in dep.manifest.lower()),
+                fixable=bool(
+                    fixes
+                    and any(
+                        m in dep.manifest.lower()
+                        for m in ("requirements", "package.json", ".gradle", "pom.xml")
+                    )
+                ),
                 references=[f"https://osv.dev/vulnerability/{primary}"],
                 metadata={
                     "package": dep.name,

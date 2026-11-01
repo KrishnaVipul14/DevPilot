@@ -271,13 +271,14 @@ def parse_package_json(text: str, manifest: str) -> list[Dependency]:
     except Exception:  # noqa: BLE001
         return []
     deps: list[Dependency] = []
-    for section in ("dependencies", "devDependencies"):
+    for section in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
         sec_dict = data.get(section, {}) or {}
         if isinstance(sec_dict, dict):
             for name, spec in sec_dict.items():
                 spec_str = str(spec).strip()
-                is_pinned = bool(re.fullmatch(r"\d+\.\d+\.\d+.*", spec_str))
-                clean_ver = spec_str if is_pinned else None
+                s = spec_str.lstrip("=v").strip()
+                is_pinned = bool(re.fullmatch(r"\d+\.\d+\.\d+.*", s))
+                clean_ver = s if is_pinned else None
                 deps.append(
                     Dependency(
                         name,

@@ -46,9 +46,14 @@ def isolated_workspace(ctx: RepoContext) -> Iterator[tuple[Path, str]]:
         if ctx.git_root is not None and not gitutil.is_dirty(ctx.root):
             res = gitutil.git(["worktree", "add", "--detach", str(wt_dir), "HEAD"], cwd=ctx.root)
             if res.ok and wt_dir.is_dir():
-                used_worktree = True
-                rel_sub = ctx.root.resolve().relative_to(ctx.git_root.resolve())
-                yield (wt_dir / rel_sub), "git-worktree"
+                try:
+                    rel_sub = ctx.root.resolve().relative_to(ctx.git_root.resolve())
+                    used_worktree = True
+                    yield (wt_dir / rel_sub), "git-worktree"
+                except Exception:
+                    used_worktree = False
+                    gitutil.git(["worktree", "remove", "--force", str(wt_dir)], cwd=ctx.root)
+                    gitutil.git(["worktree", "prune"], cwd=ctx.root)
         if not used_worktree:
             copy_dir = tmp_base / "repo"
             excludes = set(ctx.config.all_excludes)
@@ -158,11 +163,30 @@ def _check_non_py_files(ws: Path, non_py: list[str]) -> list[dict[str, Any]]:
     for rel in non_py:
         text = (ws / rel).read_text(encoding="utf-8")
         ok = bool(text.strip())
+        detail = f"Validated updated {rel} ({len(text.splitlines())} lines)."
+        if rel.endswith(".json"):
+            try:
+                import json
+
+                json.loads(text)
+                detail = f"Validated JSON syntax and structure for {rel}."
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                detail = f"Invalid JSON in {rel}: {exc}"
+        elif rel.endswith(".xml"):
+            try:
+                import xml.etree.ElementTree as ET
+
+                ET.fromstring(text)
+                detail = f"Validated XML syntax and structure for {rel}."
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                detail = f"Invalid XML in {rel}: {exc}"
         checks.append(
             {
                 "name": f"validate_{rel}",
                 "status": "passed" if ok else "failed",
-                "detail": f"Validated updated {rel} ({len(text.splitlines())} lines).",
+                "detail": detail,
                 "command": None,
                 "duration_ms": 1,
             }
@@ -231,7 +255,7 @@ def verify_patch_edits(
         if non_py:
             checks.extend(_check_non_py_files(ws, non_py))
 
-        if ctx.config.verify.run_tests:
+        if ctx.config.verify.run_tests and ctx.python_files:
             checks.append(_check_pytest(ctx, ws, py_bin, target_test_files, timeout))
 
     statuses = [c["status"] for c in checks]
