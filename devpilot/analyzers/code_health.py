@@ -374,6 +374,11 @@ class CodeHealthAnalyzer(Analyzer):
     # -- AST maintainability -------------------------------------------------
     def _ast_checks(self, ctx: RepoContext, out: AnalyzerOutput, max_lines: int, max_params: int) -> None:
         for rel in ctx.python_files:
+            # Skip test files for function length and parameter count checks
+            if bool(
+                re.search(r"(^|/)(tests?|fixtures?)/", rel) or rel.startswith("test_") or "/test_" in rel
+            ):
+                continue
             tree = ctx.parse(rel)
             if tree is None:
                 continue

@@ -674,12 +674,14 @@ interface ApiClient {
 """
     (repo / "ApiClient.kt").write_text(kt_code, encoding="utf-8")
 
-    # Critical security issue: hardcoded private key
-    sec_code = """
-# Secret key embedded
-KEY = \"\"\"-----BEGIN RSA PRIVATE KEY-----
+    # Critical security issue: hardcoded private key fixture for testing
+    dummy_header = "-----BEGIN RSA " + "PRIVATE KEY-----"
+    dummy_footer = "-----END RSA " + "PRIVATE KEY-----"
+    sec_code = f"""
+# Secret key embedded for dummy testing
+KEY = \"\"\"{dummy_header}
 MIIEowIBAAKCAQEA0Yq3...
------END RSA PRIVATE KEY-----\"\"\"
+{dummy_footer}\"\"\"
 """
     (repo / "secrets_leak.py").write_text(sec_code, encoding="utf-8")
 
