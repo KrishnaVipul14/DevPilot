@@ -82,23 +82,23 @@ Now open **http://127.0.0.1:8765** in your browser. Whenever you run `devpilot s
 
 ---
 
-## Setting up AI (Optional)
+## Setting up AI (Optional — Powered by Groq)
 
 DevPilot works completely fine **without** an API key. All scanning, dependency checks, impact analysis, history tracking, action plans, and Ruff/manifest auto-fixes work offline.
 
-If you want AI explanations (`devpilot explain`) and AI-generated code patches, set a Google Gemini API key:
+If you want AI explanations (`devpilot explain`), AI action plans, and AI-generated code patches, put your Groq API key (`GROQ_API_KEY`) in a `.env` file in the project root or export it in your shell:
 
 ```bash
 # Windows PowerShell
-$env:GEMINI_API_KEY="your-gemini-api-key"
+$env:GROQ_API_KEY="your-groq-api-key"
 
 # macOS / Linux
-export GEMINI_API_KEY="your-gemini-api-key"
+export GROQ_API_KEY="your-groq-api-key"
 ```
 
 **Privacy & safety with AI:**
-- DevPilot **never** reads `.env` files or private keys.
-- Any secret-looking string in code is redacted before anything is sent to Gemini.
+- DevPilot **never** scans or uploads `.env` files or private keys.
+- Any secret-looking string in code is redacted before anything is sent to Groq.
 - Only the small code snippet around the finding is sent — never your whole repository.
 
 ---
@@ -112,7 +112,7 @@ export GEMINI_API_KEY="your-gemini-api-key"
 | `devpilot dashboard` | Starts the local web UI on `http://127.0.0.1:8765`. Add `--open` to launch your browser automatically. |
 | `devpilot impact` | Checks your current `git diff` and shows affected functions, API routes, tests, and risk level. |
 | `devpilot impact --symbol validate_token` | Shows what would be affected if you changed `validate_token()`. |
-| `devpilot explain DP001` | Explains finding `DP001` in detail (uses Gemini AI if `GEMINI_API_KEY` is set). |
+| `devpilot explain DP001` | Explains finding `DP001` in detail (uses Groq AI if `GROQ_API_KEY` is set). |
 | `devpilot fix DP001` | Generates a proposed fix diff for `DP001` without touching your files. |
 | `devpilot verify DP001` | Tests the proposed patch inside an isolated Git worktree (`py_compile` + `ruff` + `pytest`). Add `--apply` to write it to your files once verified. |
 | `devpilot fix DP001 --discard` | Throws away a proposed patch safely. |
@@ -145,16 +145,19 @@ devpilot scan .
 # 2. See what depends on validate_token()
 devpilot impact --symbol validate_token
 
-# 3. Get a prioritized action plan
+# 3. Explain a finding with Groq AI
+devpilot explain DP001
+
+# 4. Get a prioritized action plan
 devpilot plan
 
-# 4. Propose and verify a fix in an isolated worktree
+# 5. Propose and verify a fix in an isolated worktree
 devpilot fix DP001 --verify --yes
 
-# 5. Check the scan & verification history
+# 6. Check the scan & verification history
 devpilot history
 
-# 6. Open the dashboard for the demo app
+# 7. Open the dashboard for the demo app
 devpilot dashboard
 ```
 
@@ -192,7 +195,7 @@ DevPilot/
 │   ├── cli/                # Typer CLI commands and terminal tables
 │   ├── core/               # Scanner, config loader, Pydantic models, report writer
 │   ├── analyzers/          # Code health, dependencies (OSV), setup doctor, docs, AST graph, git impact
-│   ├── ai/                 # Gemini client, context builder (with secret redaction), prompts, action plans
+│   ├── ai/                 # Groq client, context builder (with secret redaction), prompts, action plans
 │   ├── fixes/              # Diff generator, isolated Git worktree verifier, safe patch applier
 │   ├── memory/             # SQLite database and stable finding fingerprints
 │   ├── dashboard_server/   # Local 127.0.0.1 HTTP server + pre-built static dashboard

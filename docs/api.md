@@ -17,7 +17,7 @@ When you run `devpilot dashboard`, DevPilot starts a local Python HTTP server on
 
 | Endpoint | What it returns |
 | --- | --- |
-| `GET /api/status` | Server status, whether a scan report exists, latest `scan_id`, file timestamp (`report_mtime`) used for 2.5s live polling, repo name/path, and whether AI (`GEMINI_API_KEY`) is configured. |
+| `GET /api/status` | Server status, whether a scan report exists, latest `scan_id`, file timestamp (`report_mtime`) used for 2.5s live polling, repo name/path, and whether AI (`GROQ_API_KEY`) is configured. |
 | `GET /api/report` | The latest unified scan report (`.devpilot/reports/latest.json`), merged with cached AI explanations and patch verification statuses from SQLite. Returns `404` if no scan has been run yet. |
 | `GET /api/history` | Past scans and patch verification runs from `.devpilot/devpilot.db`. |
 | `GET /api/graph` | The repository's AST code graph (`nodes`, `edges`, and counts). Returns `404` if no scan has been run yet. |
@@ -35,7 +35,7 @@ When you run `devpilot dashboard`, DevPilot starts a local Python HTTP server on
 | Endpoint | Request Body | What it does |
 | --- | --- | --- |
 | `POST /api/findings/{ref}/explain` | `{}` | Generates (or loads cached) AI explanation for finding ID (`DP001`) or fingerprint. Returns `503` if AI is not configured. |
-| `POST /api/plan` | `{}` | Generates a prioritized improvement plan. Uses Gemini AI if available, or falls back to deterministic prioritization (`source: "deterministic"`). |
+| `POST /api/plan` | `{}` | Generates a prioritized improvement plan. Uses Groq AI if available, or falls back to deterministic prioritization (`source: "deterministic"`). |
 | `POST /api/findings/{ref}/fix` | `{"engine": "auto" \| "ruff" \| "ai"}` | Creates a proposed patch diff for the finding without modifying working-tree files. |
 | `POST /api/patches/{patch_id}/verify` | `{}` | **Explicit approval step:** applies the patch inside an isolated temporary Git worktree (or temp copy) and runs `py_compile`, `ruff`, and targeted `pytest`. |
 | `POST /api/patches/{patch_id}/apply` | `{}` | Writes a verified patch to the actual working-tree files (refuses if the target file changed since the patch was proposed). |

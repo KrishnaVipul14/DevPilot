@@ -69,7 +69,7 @@ export default function PlanPage() {
           icon={<ListChecks className="h-7 w-7" />}
         >
           Click <strong>Generate Action Plan</strong> above (or run <code>devpilot plan</code>) to
-          build a prioritized roadmap. Works both with Gemini AI and offline via deterministic
+          build a prioritized roadmap. Works both with Groq AI and offline via deterministic
           triage.
         </EmptyState>
       ) : (

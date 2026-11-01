@@ -20,7 +20,7 @@ analyzers:
 
 ai:
   enabled: true
-  provider: gemini
+  provider: groq
 
 verify:
   timeout: 180

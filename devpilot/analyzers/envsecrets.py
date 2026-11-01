@@ -67,6 +67,7 @@ def parse_env_keys(text: str) -> dict[str, int]:
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
+    ("Groq API key", re.compile(r"\bgsk_[A-Za-z0-9]{40,}\b")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     ("Stripe live secret key", re.compile(r"\bsk_live_[0-9A-Za-z]{20,}\b")),

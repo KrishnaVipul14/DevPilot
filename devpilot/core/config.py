@@ -58,7 +58,7 @@ class AnalyzersConfig(BaseModel):
 
 class AIConfig(BaseModel):
     enabled: bool = True
-    provider: Literal["gemini"] = "gemini"
+    provider: Literal["groq", "gemini"] = "groq"
     model: str | None = None  # default comes from the provider / env
     timeout: float = 60
     max_context_chars: int = 24000
@@ -132,7 +132,7 @@ analyzers:
 
 ai:
   enabled: true
-  provider: gemini            # key read from GEMINI_API_KEY (never stored here)
+  provider: groq              # key read from GROQ_API_KEY (never stored here)
 
 verify:
   timeout: 180                # seconds per verification command

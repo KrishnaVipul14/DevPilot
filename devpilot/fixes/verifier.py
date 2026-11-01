@@ -16,6 +16,7 @@ Assigns honest statuses:
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -46,7 +47,6 @@ def isolated_workspace(ctx: RepoContext) -> Iterator[tuple[Path, str]]:
             res = gitutil.git(["worktree", "add", "--detach", str(wt_dir), "HEAD"], cwd=ctx.root)
             if res.ok and wt_dir.is_dir():
                 used_worktree = True
-                # If ctx.root is a subdirectory of git_root, point inside it
                 rel_sub = ctx.root.resolve().relative_to(ctx.git_root.resolve())
                 yield (wt_dir / rel_sub), "git-worktree"
         if not used_worktree:
@@ -115,12 +115,27 @@ def _check_ruff_static(ctx: RepoContext, ws: Path, py_files: list[str]) -> dict[
     if not ruff:
         return None
     select = ",".join(ctx.config.analyzers.code_health.select)
+    json_cmd = [ruff, "check", "--no-cache", "--output-format", "json", "--exit-zero", "--select", select, *py_files]
+    base_res = run(json_cmd, cwd=ctx.root, timeout=60)
+    new_res = run(json_cmd, cwd=ws, timeout=60)
     cmd = [ruff, "check", "--no-cache", "--select", select, *py_files]
     res = run(cmd, cwd=ws, timeout=60)
+    passed = res.ok
+    detail = (res.stdout + "\n" + res.stderr).strip() or "All selected Ruff rules passed."
+    if not passed:
+        try:
+            base_list = json.loads(base_res.stdout or "[]")
+            new_list = json.loads(new_res.stdout or "[]")
+            base_keys = {(x.get("code"), x.get("message")) for x in base_list}
+            if len(new_list) < len(base_list) and all((x.get("code"), x.get("message")) in base_keys for x in new_list):
+                passed = True
+                detail = f"Resolved {len(base_list) - len(new_list)} violation(s); {len(new_list)} pre-existing unrelated issue(s) remain."
+        except Exception:  # noqa: BLE001
+            pass
     return {
         "name": "ruff_static_check",
-        "status": "passed" if res.ok else "failed",
-        "detail": (res.stdout + "\n" + res.stderr).strip() or "All selected Ruff rules passed.",
+        "status": "passed" if passed else "failed",
+        "detail": detail,
         "command": f"ruff check --select {select} {' '.join(py_files)}",
         "duration_ms": res.duration_ms,
     }

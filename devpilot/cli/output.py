@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from rich.console import Console
@@ -12,8 +13,16 @@ from rich.text import Text
 
 from devpilot.core.models import AIExplanation, AnalyzerState, Finding, Report, Severity
 
-console = Console()
-err_console = Console(stderr=True)
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
+
+console = Console(legacy_windows=False)
+err_console = Console(stderr=True, legacy_windows=False)
 
 SEV_STYLE: dict[str, str] = {
     "critical": "bold white on red",

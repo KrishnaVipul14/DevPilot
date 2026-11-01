@@ -36,9 +36,13 @@ class AIProvider(ABC):
 
 
 def get_ai_provider(config: DevPilotConfig) -> AIProvider:
-    from devpilot.ai.gemini import GeminiProvider
+    if config.ai.provider == "gemini":
+        from devpilot.ai.gemini import GeminiProvider
 
-    return GeminiProvider(config)
+        return GeminiProvider(config)
+    from devpilot.ai.groq import GroqProvider
+
+    return GroqProvider(config)
 
 
 def is_ai_disabled(config: DevPilotConfig) -> tuple[bool, str]:
