@@ -94,7 +94,8 @@ class DependencyAnalyzer(Analyzer):
         self._unpinned(deps, out)
         pinned = [d for d in deps if d.pinned]
         if ctx.offline:
-            raise AnalyzerSkipped(f"Offline mode: {len(pinned)} pinned dependencies were not audited")
+            out.message = f"Offline mode: {len(pinned)} pinned dependencies were not audited"
+            return out
         cfg = ctx.config.analyzers.dependencies
         unique = sorted({(d.name, d.version or "") for d in pinned})
         if cfg.engine == "pip-audit":
@@ -148,6 +149,7 @@ class DependencyAnalyzer(Analyzer):
                       f"Advisory: {', '.join(ids)} ({sev_source})"),
             suggestion=upgrade + ".",
             confidence=confidence,
+            fixable=bool(fixes and "requirements" in dep.manifest.lower()),
             references=[f"https://osv.dev/vulnerability/{primary}"],
             metadata={"package": dep.name, "installed_version": dep.version, "advisory": primary,
                       "aliases": ids, "cves": cves, "fixed_versions": fixes, "severity_source": sev_source},

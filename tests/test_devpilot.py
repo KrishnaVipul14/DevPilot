@@ -205,3 +205,72 @@ def test_cli_commands_and_local_api_server(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_offline_dependency_unpinned_preservation(tmp_path: Path) -> None:
+    repo = tmp_path / "offline_dep_repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("fastapi>=0.100.0\nuvicorn\nrequests==2.25.0\n", encoding="utf-8")
+    report = run_scan(repo, offline=True, persist=False)
+    # The unpinned finding must NOT be dropped in offline mode
+    unpinned_findings = [f for f in report.findings if f.rule == "unpinned-dependencies"]
+    assert len(unpinned_findings) == 1
+    assert "fastapi" in unpinned_findings[0].evidence
+
+
+def test_patch_manager_new_file_creation(tmp_path: Path) -> None:
+    repo = tmp_path / "patch_new_file_repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("import os\napi_key = os.getenv('API_KEY')\n", encoding="utf-8")
+    report = run_scan(repo, offline=True, persist=True)
+    missing_env_finding = next(f for f in report.findings if f.rule == "env-example-missing")
+    assert missing_env_finding.fixable is True
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    patch = propose_patch(ctx, missing_env_finding, engine="auto")
+    assert patch["status"] == "proposed"
+    assert ".env.example" in patch["files"]
+
+    verified = verify_patch(ctx, patch["patch_id"])
+    assert verified["status"] in ("verified", "partially_verified")
+
+    applied = apply_patch(ctx, patch["patch_id"])
+    assert applied["status"] == "applied"
+    assert (repo / ".env.example").is_file()
+    assert "API_KEY=" in (repo / ".env.example").read_text(encoding="utf-8")
+
+
+def test_setup_doctor_subdirectory_and_fixable(tmp_path: Path) -> None:
+    repo = tmp_path / "sub_repo"
+    sub = repo / "services" / "auth"
+    sub.mkdir(parents=True)
+    (sub / "auth.py").write_text("import os\nsecret = os.environ['AUTH_SECRET']\n", encoding="utf-8")
+    (sub / ".env").write_text("AUTH_SECRET=supersecret123\n", encoding="utf-8")
+
+    gitutil.git(["init"], cwd=repo)
+    gitutil.git(["config", "user.email", "test@example.com"], cwd=repo)
+    gitutil.git(["config", "user.name", "Test User"], cwd=repo)
+    # Do not ignore .env
+    report = run_scan(repo, offline=True, persist=False)
+    rules = {f.rule for f in report.findings}
+    # It must detect that services/auth/.env is not ignored
+    assert "env-file-not-ignored" in rules
+    not_ignored = next(f for f in report.findings if f.rule == "env-file-not-ignored")
+    assert "services/auth/.env" in not_ignored.file
+
+
+def test_server_mime_and_path_traversal_protection(tmp_path: Path) -> None:
+    server = create_server(tmp_path, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Directory traversal attempt should be rejected with 403
+        traversal_req = urllib.request.Request(f"http://127.0.0.1:{port}/../../etc/passwd")
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(traversal_req, timeout=5)
+        assert exc_info.value.code == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+

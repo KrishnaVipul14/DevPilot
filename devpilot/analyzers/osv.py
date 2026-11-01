@@ -37,8 +37,13 @@ def query_batch(packages: list[tuple[str, str]], timeout: float = 30) -> list[li
         chunk = packages[start:start + 500]
         body = {"queries": [{"package": {"name": n, "ecosystem": "PyPI"}, "version": v} for n, v in chunk]}
         data = _request(f"{OSV_API}/querybatch", body, timeout)
-        for item in data.get("results", []):
-            results.append([v["id"] for v in item.get("vulns", []) or []])
+        items = data.get("results") if isinstance(data, dict) else []
+        if not isinstance(items, list):
+            items = []
+        for idx in range(len(chunk)):
+            item = items[idx] if idx < len(items) and isinstance(items[idx], dict) else {}
+            vulns = item.get("vulns", []) or []
+            results.append([v["id"] for v in vulns if isinstance(v, dict) and "id" in v])
     return results
 
 
@@ -64,6 +69,8 @@ _W = {
     "AC": {"L": 0.77, "H": 0.44},
     "UI": {"N": 0.85, "R": 0.62},
     "C": {"H": 0.56, "L": 0.22, "N": 0.0},
+    "I": {"H": 0.56, "L": 0.22, "N": 0.0},
+    "A": {"H": 0.56, "L": 0.22, "N": 0.0},
 }
 _PR = {"U": {"N": 0.85, "L": 0.62, "H": 0.27}, "C": {"N": 0.85, "L": 0.68, "H": 0.5}}
 
@@ -77,7 +84,7 @@ def cvss3_base_score(vector: str) -> float | None:
     try:
         parts = dict(p.split(":", 1) for p in vector.split("/")[1:])
         scope = parts["S"]
-        iss = 1 - (1 - _W["C"][parts["C"]]) * (1 - _W["C"][parts["I"]]) * (1 - _W["C"][parts["A"]])
+        iss = 1 - (1 - _W["C"][parts["C"]]) * (1 - _W["I"][parts["I"]]) * (1 - _W["A"][parts["A"]])
         impact = 6.42 * iss if scope == "U" else 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
         expl = 8.22 * _W["AV"][parts["AV"]] * _W["AC"][parts["AC"]] * _PR[scope][parts["PR"]] * _W["UI"][parts["UI"]]
     except (KeyError, ValueError, IndexError):

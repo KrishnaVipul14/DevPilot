@@ -16,6 +16,7 @@ Assigns honest statuses:
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 import tempfile
@@ -67,7 +68,12 @@ def isolated_workspace(ctx: RepoContext) -> Iterator[tuple[Path, str]]:
 def _find_python(ctx: RepoContext) -> str:
     if ctx.config.verify.python:
         return ctx.config.verify.python
-    for venv_name in (".venv", "venv"):
+    venv_env = os.environ.get("VIRTUAL_ENV")
+    if venv_env:
+        candidate = Path(venv_env) / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        if candidate.is_file():
+            return str(candidate)
+    for venv_name in (".venv", "venv", "env"):
         win = ctx.root / venv_name / "Scripts" / "python.exe"
         posix = ctx.root / venv_name / "bin" / "python"
         if win.is_file():
@@ -77,15 +83,7 @@ def _find_python(ctx: RepoContext) -> str:
     return sys.executable
 
 
-def verify_patch_edits(
-    ctx: RepoContext,
-    edits: dict[str, str],
-) -> dict[str, Any]:
-    py_bin = _find_python(ctx)
-    timeout = ctx.config.verify.timeout
-    graph = RepoGraph.build(ctx)
-
-    # Identify relevant tests before entering worktree
+def _find_target_tests(ctx: RepoContext, edits: dict[str, str], graph: RepoGraph) -> set[str]:
     target_test_files: set[str] = set()
     all_repo_tests = [f for f in ctx.python_files if is_test_file(f)]
     for rel in edits:
@@ -97,9 +95,94 @@ def verify_patch_edits(
                         for t in item.get("tests", []):
                             if t.get("file"):
                                 target_test_files.add(t["file"])
-    if not target_test_files and all_repo_tests:
-        target_test_files.update(all_repo_tests)
+    return target_test_files or set(all_repo_tests)
 
+
+def _check_python_syntax(py_bin: str, ws: Path, py_files: list[str]) -> dict[str, Any]:
+    cmd = [py_bin, "-m", "py_compile", *py_files]
+    res = run(cmd, cwd=ws, timeout=30)
+    return {
+        "name": "python_syntax",
+        "status": "passed" if res.ok else "failed",
+        "detail": (res.stdout + "\n" + res.stderr).strip() or f"Compiled {len(py_files)} file(s) cleanly.",
+        "command": " ".join(cmd),
+        "duration_ms": res.duration_ms,
+    }
+
+
+def _check_ruff_static(ctx: RepoContext, ws: Path, py_files: list[str]) -> dict[str, Any] | None:
+    ruff = find_ruff()
+    if not ruff:
+        return None
+    select = ",".join(ctx.config.analyzers.code_health.select)
+    cmd = [ruff, "check", "--no-cache", "--select", select, *py_files]
+    res = run(cmd, cwd=ws, timeout=60)
+    return {
+        "name": "ruff_static_check",
+        "status": "passed" if res.ok else "failed",
+        "detail": (res.stdout + "\n" + res.stderr).strip() or "All selected Ruff rules passed.",
+        "command": f"ruff check --select {select} {' '.join(py_files)}",
+        "duration_ms": res.duration_ms,
+    }
+
+
+def _check_non_py_files(ws: Path, non_py: list[str]) -> list[dict[str, Any]]:
+    checks = []
+    for rel in non_py:
+        text = (ws / rel).read_text(encoding="utf-8")
+        ok = bool(text.strip())
+        checks.append({
+            "name": f"validate_{rel}",
+            "status": "passed" if ok else "failed",
+            "detail": f"Validated updated {rel} ({len(text.splitlines())} lines).",
+            "command": None,
+            "duration_ms": 1,
+        })
+    return checks
+
+
+def _check_pytest(
+    ctx: RepoContext, ws: Path, py_bin: str, target_test_files: set[str], timeout: float
+) -> dict[str, Any]:
+    if not target_test_files:
+        return {
+            "name": "pytest",
+            "status": "skipped",
+            "detail": "No test files were found in the repository.",
+            "command": None,
+            "duration_ms": 0,
+        }
+    sorted_tests = sorted(target_test_files)
+    cmd = [py_bin, "-m", "pytest", "-q", *sorted_tests]
+    res = run(cmd, cwd=ws, timeout=timeout)
+    if "No module named pytest" in res.stderr:
+        cmd = [sys.executable, "-m", "pytest", "-q", *sorted_tests]
+        res = run(cmd, cwd=ws, timeout=timeout)
+    if "No module named pytest" in res.stderr:
+        return {
+            "name": "pytest",
+            "status": "skipped",
+            "detail": "pytest is not installed in the target environment.",
+            "command": f"pytest -q {' '.join(sorted_tests)}",
+            "duration_ms": res.duration_ms,
+        }
+    return {
+        "name": "pytest",
+        "status": "passed" if res.ok else "failed",
+        "detail": (res.stdout + "\n" + res.stderr).strip()[:4000],
+        "command": f"pytest -q {' '.join(sorted_tests)}",
+        "duration_ms": res.duration_ms,
+    }
+
+
+def verify_patch_edits(
+    ctx: RepoContext,
+    edits: dict[str, str],
+) -> dict[str, Any]:
+    py_bin = _find_python(ctx)
+    timeout = ctx.config.verify.timeout
+    graph = RepoGraph.build(ctx)
+    target_test_files = _find_target_tests(ctx, edits, graph)
     checks: list[dict[str, Any]] = []
 
     with isolated_workspace(ctx) as (ws, mode):
@@ -109,80 +192,18 @@ def verify_patch_edits(
             dest.write_text(content, encoding="utf-8")
 
         py_files = [r for r in edits if r.endswith(".py")]
-
-        # 1. Syntax check via py_compile
         if py_files:
-            cmd = [py_bin, "-m", "py_compile", *py_files]
-            res = run(cmd, cwd=ws, timeout=30)
-            checks.append({
-                "name": "python_syntax",
-                "status": "passed" if res.ok else "failed",
-                "detail": (res.stdout + "\n" + res.stderr).strip() or f"Compiled {len(py_files)} file(s) cleanly.",
-                "command": " ".join(cmd),
-                "duration_ms": res.duration_ms,
-            })
+            checks.append(_check_python_syntax(py_bin, ws, py_files))
+            ruff_res = _check_ruff_static(ctx, ws, py_files)
+            if ruff_res:
+                checks.append(ruff_res)
 
-        # 2. Ruff static check on modified Python files
-        ruff = find_ruff()
-        if py_files and ruff:
-            select = ",".join(ctx.config.analyzers.code_health.select)
-            cmd = [ruff, "check", "--no-cache", "--select", select, *py_files]
-            res = run(cmd, cwd=ws, timeout=60)
-            checks.append({
-                "name": "ruff_static_check",
-                "status": "passed" if res.ok else "failed",
-                "detail": (res.stdout + "\n" + res.stderr).strip() or "All selected Ruff rules passed.",
-                "command": f"ruff check --select {select} {' '.join(py_files)}",
-                "duration_ms": res.duration_ms,
-            })
-
-        # 3. Non-Python file validation (e.g. requirements.txt / .env.example)
         non_py = [r for r in edits if not r.endswith(".py")]
-        for rel in non_py:
-            text = (ws / rel).read_text(encoding="utf-8")
-            ok = bool(text.strip())
-            checks.append({
-                "name": f"validate_{rel}",
-                "status": "passed" if ok else "failed",
-                "detail": f"Validated updated {rel} ({len(text.splitlines())} lines).",
-                "command": None,
-                "duration_ms": 1,
-            })
+        if non_py:
+            checks.extend(_check_non_py_files(ws, non_py))
 
-        # 4. Targeted pytest execution
         if ctx.config.verify.run_tests:
-            if target_test_files:
-                sorted_tests = sorted(target_test_files)
-                cmd = [py_bin, "-m", "pytest", "-q", *sorted_tests]
-                res = run(cmd, cwd=ws, timeout=timeout)
-                if "No module named pytest" in res.stderr:
-                    # Fallback to sys.executable if project venv lacks pytest
-                    cmd = [sys.executable, "-m", "pytest", "-q", *sorted_tests]
-                    res = run(cmd, cwd=ws, timeout=timeout)
-                if "No module named pytest" in res.stderr:
-                    checks.append({
-                        "name": "pytest",
-                        "status": "skipped",
-                        "detail": "pytest is not installed in the target environment.",
-                        "command": f"pytest -q {' '.join(sorted_tests)}",
-                        "duration_ms": res.duration_ms,
-                    })
-                else:
-                    checks.append({
-                        "name": "pytest",
-                        "status": "passed" if res.ok else "failed",
-                        "detail": (res.stdout + "\n" + res.stderr).strip()[:4000],
-                        "command": f"pytest -q {' '.join(sorted_tests)}",
-                        "duration_ms": res.duration_ms,
-                    })
-            else:
-                checks.append({
-                    "name": "pytest",
-                    "status": "skipped",
-                    "detail": "No test files were found in the repository.",
-                    "command": None,
-                    "duration_ms": 0,
-                })
+            checks.append(_check_pytest(ctx, ws, py_bin, target_test_files, timeout))
 
     statuses = [c["status"] for c in checks]
     if not checks or all(s == "skipped" for s in statuses):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -251,6 +252,46 @@ def cmd_explain(
         console.print(f"[yellow]Note: AI explanation unavailable ({ai_err}). Displayed deterministic finding details above.[/yellow]")
 
 
+def _handle_fix_discard(ctx: RepoContext, finding_id: str) -> None:
+    try:
+        patch = discard_patch(ctx, finding_id)
+    except PatchError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"[yellow]Discarded patch `{patch['patch_id']}` for `{patch['finding_id']}`.[/yellow]")
+
+
+def _handle_fix_verification(
+    ctx: RepoContext, patch: dict[str, Any], yes: bool, json_out: bool
+) -> dict[str, Any] | None:
+    if not yes and not json_out:
+        approved = typer.confirm(
+            f"Approve patch {patch['patch_id']} to run verification in an isolated worktree?", default=True
+        )
+        if not approved:
+            console.print("[yellow]Verification cancelled. Patch remains in 'proposed' state.[/yellow]")
+            return None
+    return verify_patch(ctx, patch["patch_id"])
+
+
+def _handle_fix_application(
+    ctx: RepoContext, patch: dict[str, Any], yes: bool, json_out: bool
+) -> dict[str, Any] | None:
+    if patch["status"] not in ("verified", "partially_verified"):
+        err_console.print(
+            f"[red]Refusing to apply patch because verification status is `{patch['status']}`.[/red]"
+        )
+        raise typer.Exit(1)
+    if not yes and not json_out:
+        approved_apply = typer.confirm(
+            f"Apply verified patch {patch['patch_id']} to your working tree?", default=False
+        )
+        if not approved_apply:
+            console.print("[yellow]Patch was verified in isolation but NOT applied to the working tree.[/yellow]")
+            return None
+    return apply_patch(ctx, patch["patch_id"])
+
+
 @app.command("fix")
 def cmd_fix(
     finding_id: str = typer.Argument(..., help="Finding ID (e.g. DP001) or fingerprint."),
@@ -271,12 +312,7 @@ def cmd_fix(
     ctx = RepoContext(root=root, config=load_config(root))
 
     if discard:
-        try:
-            patch = discard_patch(ctx, finding_id)
-        except PatchError as exc:
-            err_console.print(f"[red]Error:[/red] {exc}")
-            raise typer.Exit(1) from exc
-        console.print(f"[yellow]Discarded patch `{patch['patch_id']}` for `{patch['finding_id']}`.[/yellow]")
+        _handle_fix_discard(ctx, finding_id)
         return
 
     report = load_latest_report(root, refresh_from_memory=False)
@@ -300,29 +336,16 @@ def cmd_fix(
         raise typer.Exit(1) from exc
 
     if verify_now or apply_now:
-        if not yes and not json_out:
-            approved = typer.confirm(
-                f"Approve patch {patch['patch_id']} to run verification in an isolated worktree?", default=True
-            )
-            if not approved:
-                console.print("[yellow]Verification cancelled. Patch remains in 'proposed' state.[/yellow]")
-                return
-        patch = verify_patch(ctx, patch["patch_id"])
+        verified_patch = _handle_fix_verification(ctx, patch, yes, json_out)
+        if verified_patch is None:
+            return
+        patch = verified_patch
 
     if apply_now:
-        if patch["status"] not in ("verified", "partially_verified"):
-            err_console.print(
-                f"[red]Refusing to apply patch because verification status is `{patch['status']}`.[/red]"
-            )
-            raise typer.Exit(1)
-        if not yes and not json_out:
-            approved_apply = typer.confirm(
-                f"Apply verified patch {patch['patch_id']} to your working tree?", default=False
-            )
-            if not approved_apply:
-                console.print("[yellow]Patch was verified in isolation but NOT applied to the working tree.[/yellow]")
-                return
-        patch = apply_patch(ctx, patch["patch_id"])
+        applied_patch = _handle_fix_application(ctx, patch, yes, json_out)
+        if applied_patch is None:
+            return
+        patch = applied_patch
 
     if json_out:
         print(json.dumps(patch, indent=2))

@@ -51,6 +51,48 @@ def parse_diff_changed_lines(diff_text: str) -> dict[str, set[int]]:
     return changed
 
 
+def _evaluate_symbol_risk(
+    sym: Node,
+    routes: list[dict[str, str]],
+    caller_functions: list[str],
+    dependent_modules: set[str],
+    tests_map: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    level = "low"
+    is_sensitive = bool(_CRITICAL_PATH_RE.search(sym.file or "") or _CRITICAL_PATH_RE.search(sym.name))
+    if is_sensitive:
+        reasons.append(f"`{sym.name}` is in a security/auth/data-sensitive module or symbol (`{sym.file}`).")
+        level = _max_risk(level, "high")
+
+    if routes:
+        reasons.append(
+            f"{len(routes)} HTTP endpoint(s) reach `{sym.name}` ({', '.join(r['method'] + ' ' + r['path'] for r in routes[:4])})."
+        )
+        level = _max_risk(level, "high" if is_sensitive or len(routes) >= 2 else "medium")
+
+    if caller_functions:
+        reasons.append(f"{len(caller_functions)} dependent function(s) call `{sym.name}`.")
+        level = _max_risk(level, "high" if len(caller_functions) >= 4 else "medium")
+
+    if dependent_modules:
+        reasons.append(f"{len(dependent_modules)} module(s) depend on `{sym.module}`.")
+        level = _max_risk(level, "medium")
+
+    if not tests_map and (caller_functions or routes or is_sensitive):
+        reasons.append(f"No automated tests were found covering `{sym.name}`.")
+        level = _max_risk(level, "critical" if (is_sensitive and routes) else "high")
+    elif is_sensitive and routes and len(caller_functions) >= 2:
+        level = _max_risk(level, "critical")
+    elif tests_map:
+        reasons.append(f"{len(tests_map)} relevant test(s) identified for verification.")
+
+    if not reasons:
+        reasons.append(f"`{sym.name}` has no external callers or routes in the static graph.")
+
+    return {"level": level, "reasons": reasons}
+
+
 def _symbol_impact(graph: RepoGraph, sym: Node) -> dict[str, Any]:
     callers_map = graph.transitive_callers(sym.id, max_depth=4)
     caller_functions: list[str] = []
@@ -102,47 +144,14 @@ def _symbol_impact(graph: RepoGraph, sym: Node) -> dict[str, Any]:
                                 "certainty": "inferred",
                             }
 
-    # Assess risk based on transparent rules
-    reasons: list[str] = []
-    level = "low"
-    is_sensitive = bool(_CRITICAL_PATH_RE.search(sym.file or "") or _CRITICAL_PATH_RE.search(sym.name))
-    if is_sensitive:
-        reasons.append(f"`{sym.name}` is in a security/auth/data-sensitive module or symbol (`{sym.file}`).")
-        level = _max_risk(level, "high")
-
-    if routes:
-        reasons.append(f"{len(routes)} HTTP endpoint(s) reach `{sym.name}` ({', '.join(r['method'] + ' ' + r['path'] for r in routes[:4])}).")
-        level = _max_risk(level, "high" if is_sensitive or len(routes) >= 2 else "medium")
-
-    if caller_functions:
-        reasons.append(f"{len(caller_functions)} dependent function(s) call `{sym.name}`.")
-        if len(caller_functions) >= 4:
-            level = _max_risk(level, "high")
-        else:
-            level = _max_risk(level, "medium")
-
-    if dependent_modules:
-        reasons.append(f"{len(dependent_modules)} module(s) depend on `{sym.module}`.")
-        level = _max_risk(level, "medium")
-
-    if not tests_map and (caller_functions or routes or is_sensitive):
-        reasons.append(f"No automated tests were found covering `{sym.name}`.")
-        level = _max_risk(level, "critical" if (is_sensitive and routes) else "high")
-    elif is_sensitive and routes and len(caller_functions) >= 2:
-        level = _max_risk(level, "critical")
-    elif tests_map:
-        reasons.append(f"{len(tests_map)} relevant test(s) identified for verification.")
-
-    if not reasons:
-        reasons.append(f"`{sym.name}` has no external callers or routes in the static graph.")
-
+    risk = _evaluate_symbol_risk(sym, routes, caller_functions, dependent_modules, tests_map)
     return {
         "symbol": sym.id,
         "callers": sorted(caller_functions),
         "dependent_modules": sorted(dependent_modules),
         "routes": routes,
         "tests": list(tests_map.values()),
-        "risk": {"level": level, "reasons": reasons},
+        "risk": risk,
     }
 
 
@@ -199,19 +208,7 @@ def analyze_symbol_impact(ctx: RepoContext, symbol_query: str, graph: RepoGraph 
     }
 
 
-def analyze_git_impact(ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | None = None) -> dict[str, Any]:
-    """Analyze uncommitted working-tree changes (and staged changes) against `base`."""
-    graph = graph or RepoGraph.build(ctx)
-    now = datetime.now(timezone.utc).isoformat()
-    if ctx.git_root is None:
-        return {
-            "base": base, "mode": "git", "generated_at": now,
-            "changed_files": [], "changed_symbols": [], "impacts": [],
-            "overall_risk": {"level": "low", "reasons": ["Not a Git repository."]},
-            "suggested_commands": [], "limitations": list(GRAPH_LIMITATIONS),
-        }
-
-    # Diff working tree vs base; if empty and base=="HEAD", compare HEAD~1..HEAD if available
+def _collect_diff_lines(ctx: RepoContext, base: str) -> tuple[dict[str, set[int]], str]:
     diff_res = gitutil.git(["diff", "-U0", base], ctx.root)
     effective_base = base
     if not diff_res.stdout.strip() and base == "HEAD":
@@ -226,7 +223,12 @@ def analyze_git_impact(ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | 
         if rel in ctx.files and rel not in changed_lines:
             text = ctx.read_text(rel) or ""
             changed_lines[rel] = set(range(1, len(text.splitlines()) + 2))
+    return changed_lines, effective_base
 
+
+def _map_changed_files_and_symbols(
+    graph: RepoGraph, changed_lines: dict[str, set[int]]
+) -> tuple[list[dict[str, Any]], dict[str, Node]]:
     changed_files: list[dict[str, Any]] = []
     changed_symbols_map: dict[str, Node] = {}
 
@@ -242,7 +244,6 @@ def analyze_git_impact(ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | 
                 file_syms.append(sym.id)
             elif sym and sym.id not in file_syms:
                 file_syms.append(sym.id)
-        # If module-level lines changed outside any function/class, include module functions Imported by others
         if not file_syms:
             mod = module_name(rel)
             for edge in graph.outgoing(mod, ("defines",)):
@@ -251,6 +252,23 @@ def analyze_git_impact(ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | 
                     changed_symbols_map.setdefault(node.id, node)
                     file_syms.append(node.id)
         changed_files.append({"path": rel, "status": "modified", "changed_symbols": file_syms})
+    return changed_files, changed_symbols_map
+
+
+def analyze_git_impact(ctx: RepoContext, base: str = "HEAD", graph: RepoGraph | None = None) -> dict[str, Any]:
+    """Analyze uncommitted working-tree changes (and staged changes) against `base`."""
+    graph = graph or RepoGraph.build(ctx)
+    now = datetime.now(timezone.utc).isoformat()
+    if ctx.git_root is None:
+        return {
+            "base": base, "mode": "git", "generated_at": now,
+            "changed_files": [], "changed_symbols": [], "impacts": [],
+            "overall_risk": {"level": "low", "reasons": ["Not a Git repository."]},
+            "suggested_commands": [], "limitations": list(GRAPH_LIMITATIONS),
+        }
+
+    changed_lines, effective_base = _collect_diff_lines(ctx, base)
+    changed_files, changed_symbols_map = _map_changed_files_and_symbols(graph, changed_lines)
 
     impacts: list[dict[str, Any]] = []
     all_test_files: set[str] = set()

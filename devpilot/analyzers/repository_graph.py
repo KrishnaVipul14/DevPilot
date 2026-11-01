@@ -386,43 +386,47 @@ class _CallVisitor(ast.NodeVisitor):
             return None
         return ref if ref in self.indexes else None
 
+    def _resolve_name(self, func: ast.Name) -> str | None:
+        for depth in range(len(self.stack), -1, -1):
+            prefix = ".".join(self.stack[:depth])
+            qual = f"{prefix}.{func.id}" if prefix else func.id
+            if qual in self.idx.defs and not (self.class_stack and prefix == self.class_stack[-1]):
+                return self.idx.defs[qual]
+        alias = self.idx.aliases.get(func.id)
+        return self._resolve_alias(alias) if alias else None
+
+    def _resolve_attribute(self, base: str, attr: str) -> str | None:
+        if base in ("self", "cls") and self.class_stack:
+            cand = self.idx.defs.get(f"{self.class_stack[-1]}.{attr}")
+            if cand:
+                return cand
+        if base in self.idx.defs:
+            cand = self.idx.defs.get(f"{base}.{attr}")
+            if cand:
+                return cand
+        alias = self.idx.aliases.get(base)
+        if not alias:
+            return None
+        if ":" not in alias and alias in self.indexes:
+            cand = self.indexes[alias].defs.get(attr)
+            if cand:
+                return cand
+            sub_alias = self.indexes[alias].aliases.get(attr)
+            return self._resolve_alias(sub_alias) if sub_alias else None
+        cls_id = self._resolve_alias(alias)
+        if cls_id:
+            mod, qual = cls_id.split(":", 1)
+            return self.indexes[mod].defs.get(f"{qual}.{attr}") if mod in self.indexes else None
+        return None
+
     def _resolve(self, func: ast.AST) -> tuple[str | None, str]:
         if isinstance(func, ast.Name):
-            # nested def in current scope, then module-level def, then imports
-            for depth in range(len(self.stack), -1, -1):
-                prefix = ".".join(self.stack[:depth])
-                qual = f"{prefix}.{func.id}" if prefix else func.id
-                if qual in self.idx.defs and not (self.class_stack and prefix == self.class_stack[-1]):
-                    return self.idx.defs[qual], "resolved"
-            alias = self.idx.aliases.get(func.id)
-            return (self._resolve_alias(alias), "resolved") if alias else (None, "resolved")
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            base, attr = func.value.id, func.attr
-            if base in ("self", "cls") and self.class_stack:
-                cand = self.idx.defs.get(f"{self.class_stack[-1]}.{attr}")
-                if cand:
-                    return cand, "resolved"
-            if base in self.idx.defs:  # ClassName.method
-                cand = self.idx.defs.get(f"{base}.{attr}")
-                if cand:
-                    return cand, "resolved"
-            alias = self.idx.aliases.get(base)
-            if alias:
-                if ":" not in alias and alias in self.indexes:
-                    cand = self.indexes[alias].defs.get(attr)
-                    if cand:
-                        return cand, "resolved"
-                    sub_alias = self.indexes[alias].aliases.get(attr)
-                    if sub_alias:
-                        return self._resolve_alias(sub_alias), "resolved"
-                else:
-                    cls_id = self._resolve_alias(alias)
-                    if cls_id:
-                        mod, qual = cls_id.split(":", 1)
-                        cand = self.indexes[mod].defs.get(f"{qual}.{attr}") if mod in self.indexes else None
-                        if cand:
-                            return cand, "resolved"
+            return self._resolve_name(func), "resolved"
         if isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name):
+                res = self._resolve_attribute(func.value.id, func.attr)
+                if res:
+                    return res, "resolved"
             candidates = self.method_index.get(func.attr, [])
             if len(candidates) == 1 and not func.attr.startswith("__"):
                 return candidates[0], "inferred"

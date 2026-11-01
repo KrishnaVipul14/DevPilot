@@ -39,13 +39,21 @@ def apply_patch(ctx: RepoContext, ref: str) -> dict[str, Any]:
 
     for rel, expected_hash in file_hashes.items():
         current = ctx.read_text(rel)
-        if current is None or sha256_text(current) != expected_hash:
-            raise PatchError(
-                f"Refusing to apply patch: `{rel}` has changed since patch `{patch['patch_id']}` was proposed."
-            )
+        is_new_file = expected_hash in (sha256_text(""), "")
+        if is_new_file:
+            if current is not None and current != "":
+                raise PatchError(
+                    f"Refusing to apply patch: `{rel}` was proposed as a new file, but already exists on disk."
+                )
+        else:
+            if current is None or sha256_text(current) != expected_hash:
+                raise PatchError(
+                    f"Refusing to apply patch: `{rel}` has changed since patch `{patch['patch_id']}` was proposed."
+                )
 
     for rel, content in edits.items():
         target = ctx.root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
     patch["status"] = "applied"
