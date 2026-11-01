@@ -13,6 +13,7 @@ relationships resolved only by method name are marked ``inferred``.
 from __future__ import annotations
 
 import ast
+import re
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -160,11 +161,114 @@ class RepoGraph:
         method_index = graph._method_name_index()
         for idx in indexes.values():
             _CallVisitor(graph, idx, indexes, method_index).visit(idx.tree)
+        graph._process_jvm_files(ctx)
         graph._dedupe_edges()
         return graph
 
     def _add(self, node: Node) -> None:
         self.nodes[node.id] = node
+
+    def _process_jvm_files(self, ctx: RepoContext) -> None:
+        pkg_re = re.compile(r"^\s*package\s+([a-zA-Z0-9._]+)", re.MULTILINE)
+        import_re = re.compile(r"^\s*import\s+([a-zA-Z0-9._]+)", re.MULTILINE)
+        class_re = re.compile(
+            r"^\s*(?:open\s+|abstract\s+|data\s+|sealed\s+|internal\s+|public\s+|private\s+|protected\s+)*(?:class|interface|object|enum\s+class)\s+([a-zA-Z0-9_]+)(?:\s*:\s*([^{]+)|\s+extends\s+([^{]+)|\s+implements\s+([^{]+))?",
+            re.MULTILINE,
+        )
+        fun_re = re.compile(
+            r"^\s*(?:override\s+|suspend\s+|public\s+|private\s+|protected\s+|inline\s+|internal\s+)*(?:fun|(?:void|[a-zA-Z0-9_<>\[\]]+)\s+)\s*([a-zA-Z0-9_]+)\s*\([^)]*\)",
+            re.MULTILINE,
+        )
+
+        for rel in ctx.jvm_files:
+            text = ctx.read_text(rel)
+            if not text:
+                continue
+            is_test = is_test_file(rel) or "/test/" in rel or "/androidTest/" in rel
+            stem = rel.rsplit("/", 1)[-1].split(".")[0]
+            pkg_m = pkg_re.search(text)
+            pkg = pkg_m.group(1).strip() if pkg_m else ""
+            mod = f"{pkg}.{stem}" if pkg else stem
+
+            self._add(
+                Node(
+                    id=mod,
+                    kind="module",
+                    name=mod,
+                    file=rel,
+                    line=1,
+                    module=mod,
+                    meta={"is_test": is_test, "lang": "kotlin" if rel.endswith((".kt", ".kts")) else "java"},
+                )
+            )
+
+            for imp in import_re.findall(text):
+                self.edges.append(Edge(mod, imp.strip(), "imports"))
+
+            last_cid: str | None = None
+            for m in class_re.finditer(text):
+                cname = m.group(1).strip()
+                if cname in ("class", "interface", "object"):
+                    continue
+                cid = f"{mod}:{cname}"
+                last_cid = cid
+                line_no = text[: m.start()].count("\n") + 1
+                raw_bases = m.group(2) or m.group(3) or m.group(4) or ""
+                bases = [
+                    b.strip().split("(")[0].strip()
+                    for b in raw_bases.split(",")
+                    if b.strip() and not b.strip().startswith("{")
+                ]
+                is_route = any("Activity" in b for b in bases)
+                kind = "route" if is_route else "class"
+                self._add(
+                    Node(
+                        id=cid,
+                        kind=kind,
+                        name=cname,
+                        file=rel,
+                        line=line_no,
+                        module=mod,
+                        meta={"is_test": is_test, "bases": bases},
+                    )
+                )
+                self.edges.append(Edge(mod, cid, "defines"))
+                for b in bases:
+                    self.edges.append(Edge(cid, b, "extends"))
+
+            for fm in fun_re.finditer(text):
+                fname = fm.group(1).strip()
+                if fname in (
+                    "class",
+                    "interface",
+                    "object",
+                    "package",
+                    "import",
+                    "if",
+                    "while",
+                    "for",
+                    "switch",
+                    "catch",
+                    "return",
+                ):
+                    continue
+                line_no = text[: fm.start()].count("\n") + 1
+                parent_id = last_cid or mod
+                fid = f"{parent_id}.{fname}" if last_cid else f"{mod}:{fname}"
+                f_is_test = is_test or fname.startswith("test")
+                kind = "test" if f_is_test else "function"
+                self._add(
+                    Node(
+                        id=fid,
+                        kind=kind,
+                        name=fname,
+                        file=rel,
+                        line=line_no,
+                        module=mod,
+                        meta={"is_test": f_is_test},
+                    )
+                )
+                self.edges.append(Edge(parent_id, fid, "defines"))
 
     def _collect_defs(
         self,

@@ -406,3 +406,127 @@ def test_new_project_module_discovery_and_ai_configuration(
     # Verify that Ruff findings in an external directory outside cwd are kept (not dropped)
     rules = {f.rule for f in report.findings}
     assert "F841" in rules  # unused local variable in services.py
+
+
+def test_android_project_scanning_and_fixes(tmp_path: Path) -> None:
+    android_repo = tmp_path / "my_android_app"
+    (android_repo / "app" / "src" / "main").mkdir(parents=True)
+
+    manifest_xml = """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.insecureapp">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <application
+        android:allowBackup="true"
+        android:debuggable="true"
+        android:usesCleartextTraffic="true"
+        android:label="InsecureApp">
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".PaymentActivity">
+            <intent-filter>
+                <action android:name="com.example.ACTION_PAY" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"""
+    (android_repo / "app" / "src" / "main" / "AndroidManifest.xml").write_text(manifest_xml, encoding="utf-8")
+
+    build_gradle = """plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
+android {
+    compileSdk 33
+    defaultConfig {
+        minSdk 21
+        targetSdk 31
+    }
+    signingConfigs {
+        release {
+            storePassword "hardcoded_keystore_secret"
+        }
+    }
+}
+
+repositories {
+    maven { url 'http://insecure-repo.example.com/maven2' }
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.9.0'
+    implementation 'com.google.code.gson:gson'
+}
+"""
+    (android_repo / "build.gradle").write_text(build_gradle, encoding="utf-8")
+
+    kt_src = """package com.example.insecureapp
+
+import androidx.appcompat.app.AppCompatActivity
+import android.os.Bundle
+import javax.crypto.Cipher
+
+class OrderRepository {
+    fun submitOrder(): Boolean = true
+}
+
+class MainActivity : AppCompatActivity() {
+    private val repo = OrderRepository()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+    }
+
+    fun doSecretAction() {
+        println("Performing action")
+    }
+}
+"""
+    (android_repo / "app" / "src" / "main" / "MainActivity.kt").write_text(kt_src, encoding="utf-8")
+
+    report = run_scan(android_repo, offline=True, persist=True)
+
+    assert report.summary.files_scanned >= 3
+    assert report.graph is not None
+    assert report.graph.modules >= 1
+    assert report.graph.routes >= 1
+    assert report.graph.classes >= 1
+    assert report.graph.functions >= 2
+
+    rules = {f.rule for f in report.findings}
+    assert "android-debuggable" in rules
+    assert "android-cleartext-traffic" in rules
+    assert "android-allow-backup" in rules
+    assert "android-exported-missing" in rules
+    assert "android-dangerous-permission" in rules
+    assert "android-min-sdk-outdated" in rules
+    assert "android-target-sdk-outdated" in rules
+    assert "android-insecure-repo-url" in rules
+    assert "android-hardcoded-keystore-password" in rules
+    assert "android-insecure-cipher" in rules
+
+    unpinned_rules = [
+        f for f in report.findings if f.module == "dependencies" and f.rule == "unpinned-dependencies"
+    ]
+    assert len(unpinned_rules) >= 1
+
+    ctx = RepoContext(root=android_repo, config=load_config(android_repo), offline=True)
+    cleartext_finding = next(f for f in report.findings if f.rule == "android-cleartext-traffic")
+    patch = propose_patch(ctx, cleartext_finding, engine="auto")
+    assert patch["engine"] == "ruff"
+    assert 'android:usesCleartextTraffic="false"' in patch["diff"]
+
+    repo_url_finding = next(f for f in report.findings if f.rule == "android-insecure-repo-url")
+    patch_repo = propose_patch(ctx, repo_url_finding, engine="auto")
+    assert "https://insecure-repo.example.com/maven2" in patch_repo["diff"]

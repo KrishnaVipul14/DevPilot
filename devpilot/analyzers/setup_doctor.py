@@ -93,6 +93,8 @@ class SetupDoctorAnalyzer(Analyzer):
         self._check_env_files(ctx, out)
         self._check_secrets(ctx, out)
         self._check_readme(ctx, out)
+        if ctx.is_android_project:
+            self._check_android_setup(ctx, out)
         out.message = f"{len({u.name for u in usages})} environment variables referenced in code"
         return out
 
@@ -295,4 +297,106 @@ class SetupDoctorAnalyzer(Analyzer):
                     confidence=Confidence.MEDIUM,
                 ),
                 anchor="setup-missing",
+            )
+
+    def _check_android_setup(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
+        tracked = gitutil.tracked_files(ctx.root) if ctx.git_root else None
+        local_prop_path = ctx.root / "local.properties"
+        if tracked is not None and self._tracked(ctx, "local.properties", tracked):
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="android-local-properties-committed",
+                    severity=Severity.CRITICAL,
+                    title="local.properties is committed to version control",
+                    file="local.properties",
+                    evidence="`local.properties` contains machine-specific SDK paths and sensitive build properties. It must not be committed to git.",
+                    suggestion="Run `git rm --cached local.properties`, add `local.properties` to `.gitignore`, and verify SDK path setup.",
+                    confidence=Confidence.HIGH,
+                ),
+                anchor="committed:local.properties",
+            )
+        elif (
+            local_prop_path.is_file()
+            and ctx.git_root
+            and not gitutil.is_ignored(ctx.root, "local.properties")
+        ):
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="android-local-properties-not-ignored",
+                    severity=Severity.HIGH,
+                    title="local.properties is not ignored by .gitignore",
+                    file="local.properties",
+                    evidence="`local.properties` exists but is not listed in `.gitignore`, risking accidental credential/path leak.",
+                    suggestion="Add `local.properties` to `.gitignore`.",
+                    confidence=Confidence.HIGH,
+                ),
+                anchor="not-ignored:local.properties",
+            )
+
+        if tracked is not None:
+            for t_file in sorted(tracked):
+                if t_file.endswith((".jks", ".keystore")):
+                    out.add(
+                        Finding(
+                            module=self.name,
+                            rule="android-keystore-committed",
+                            severity=Severity.CRITICAL,
+                            title=f"Android signing keystore committed to git: {t_file}",
+                            file=t_file,
+                            evidence=f"Signing key `{t_file}` is tracked in version control. If compromised, attackers can sign malicious updates.",
+                            suggestion=f"Remove `{t_file}` from git history, rotate the signing key, and load keystores securely via CI/CD secrets.",
+                            confidence=Confidence.HIGH,
+                        ),
+                        anchor=f"committed:{t_file}",
+                    )
+
+        gradlew_path = ctx.root / "gradlew"
+        if not gradlew_path.is_file():
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="android-gradlew-missing",
+                    severity=Severity.LOW,
+                    title="Gradle wrapper (gradlew) missing from project root",
+                    evidence="No `gradlew` script was found in repository root. Team members and CI may use inconsistent Gradle versions.",
+                    suggestion="Run `gradle wrapper` to generate reproducible build scripts `gradlew` and `gradlew.bat`.",
+                    confidence=Confidence.HIGH,
+                ),
+                anchor="android:gradlew-missing",
+            )
+        elif os.name != "nt" and not os.access(gradlew_path, os.X_OK):
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="android-gradlew-not-executable",
+                    severity=Severity.LOW,
+                    title="gradlew is not executable",
+                    file="gradlew",
+                    evidence="`gradlew` is missing execute permissions (`+x`), which will cause build and CI failures on Unix/macOS.",
+                    suggestion="Run `chmod +x gradlew` or `git update-index --chmod=+x gradlew`.",
+                    confidence=Confidence.HIGH,
+                    fixable=True,
+                ),
+                anchor="android:gradlew-not-executable",
+            )
+
+        has_sdk = bool(
+            os.environ.get("ANDROID_HOME")
+            or os.environ.get("ANDROID_SDK_ROOT")
+            or (local_prop_path.is_file() and "sdk.dir" in (ctx.read_text("local.properties") or ""))
+        )
+        if not has_sdk:
+            out.add(
+                Finding(
+                    module=self.name,
+                    rule="android-sdk-not-configured",
+                    severity=Severity.INFO,
+                    title="Android SDK location not configured",
+                    evidence="Neither ANDROID_HOME, ANDROID_SDK_ROOT, nor sdk.dir in local.properties is configured in the current environment.",
+                    suggestion="Set ANDROID_HOME to your Android SDK directory (e.g. ~/Library/Android/sdk on macOS) or create a local.properties file.",
+                    confidence=Confidence.MEDIUM,
+                ),
+                anchor="android:sdk-not-configured",
             )

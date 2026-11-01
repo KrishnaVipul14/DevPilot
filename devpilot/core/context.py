@@ -17,7 +17,18 @@ from devpilot.core.config import DevPilotConfig
 from devpilot.utils import git as gitutil
 
 MAX_FILE_BYTES = 1_000_000  # skip huge/generated files
-SENSITIVE_FILE_PATTERNS = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "*.kdbx")
+SENSITIVE_FILE_PATTERNS = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "id_rsa*",
+    "*.kdbx",
+    "*.jks",
+    "*.keystore",
+)
 ENV_EXAMPLE_NAMES = (".env.example", ".env.sample", ".env.template", "example.env", ".env.dist")
 
 
@@ -86,6 +97,57 @@ class RepoContext:
     @cached_property
     def python_files(self) -> list[str]:
         return [f for f in self.files if f.endswith(".py")]
+
+    @cached_property
+    def kotlin_files(self) -> list[str]:
+        return [f for f in self.files if f.endswith((".kt", ".kts"))]
+
+    @cached_property
+    def java_files(self) -> list[str]:
+        return [f for f in self.files if f.endswith(".java")]
+
+    @cached_property
+    def jvm_files(self) -> list[str]:
+        return [f for f in self.files if f.endswith((".kt", ".kts", ".java"))]
+
+    @cached_property
+    def gradle_files(self) -> list[str]:
+        return [
+            f
+            for f in self.files
+            if f.endswith(
+                (
+                    "build.gradle",
+                    "build.gradle.kts",
+                    "settings.gradle",
+                    "settings.gradle.kts",
+                    "libs.versions.toml",
+                )
+            )
+        ]
+
+    @cached_property
+    def android_manifests(self) -> list[str]:
+        return [f for f in self.files if f.endswith("AndroidManifest.xml")]
+
+    @cached_property
+    def is_android_project(self) -> bool:
+        if self.android_manifests:
+            return True
+        for gf in self.gradle_files:
+            text = self.read_text(gf) or ""
+            if any(
+                marker in text
+                for marker in (
+                    "com.android.application",
+                    "com.android.library",
+                    "android {",
+                    "compileSdk",
+                    "targetSdk",
+                )
+            ):
+                return True
+        return False
 
     @cached_property
     def markdown_files(self) -> list[str]:

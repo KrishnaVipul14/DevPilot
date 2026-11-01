@@ -32,12 +32,19 @@ def _request(url: str, payload: dict | None, timeout: float) -> Any:
         raise OSVError(f"OSV request failed: {exc}") from exc
 
 
-def query_batch(packages: list[tuple[str, str]], timeout: float = 30) -> list[list[str]]:
-    """Return vulnerability ids for each (name, version) PyPI package."""
+def query_batch(
+    packages: list[tuple[str, str] | tuple[str, str, str]], timeout: float = 30
+) -> list[list[str]]:
+    """Return vulnerability ids for each package query."""
     results: list[list[str]] = []
     for start in range(0, len(packages), 500):
         chunk = packages[start : start + 500]
-        body = {"queries": [{"package": {"name": n, "ecosystem": "PyPI"}, "version": v} for n, v in chunk]}
+        queries = []
+        for item in chunk:
+            name, ver = item[0], item[1]
+            eco = item[2] if len(item) > 2 else "PyPI"
+            queries.append({"package": {"name": name, "ecosystem": eco}, "version": ver})
+        body = {"queries": queries}
         data = _request(f"{OSV_API}/querybatch", body, timeout)
         items = data.get("results") if isinstance(data, dict) else []
         if not isinstance(items, list):

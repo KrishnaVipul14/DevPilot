@@ -80,9 +80,7 @@ def _apply_ruff_edits(original: str, fix_data: dict[str, Any]) -> tuple[str, str
     return updated, msg
 
 
-def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
-    """Return `(target_file, original_text, updated_text, summary)` if a safe deterministic fix exists."""
-    # Case 1: Ruff safe edit in metadata
+def _fix_ruff(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
     fix_meta = (finding.metadata or {}).get("fix")
     if finding.file and fix_meta and isinstance(fix_meta, dict):
         orig = ctx.read_text(finding.file)
@@ -90,8 +88,10 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
             res = _apply_ruff_edits(orig, fix_meta)
             if res and res[0] != orig:
                 return finding.file, orig, res[0], res[1]
+    return None
 
-    # Case 2: Vulnerable dependency with known fixed version in requirements.txt
+
+def _fix_vulnerable_dep(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
     if finding.module == "dependencies" and finding.rule == "vulnerable-dependency" and finding.file:
         fixes = (finding.metadata or {}).get("fixed_versions") or []
         pkg = (finding.metadata or {}).get("package")
@@ -111,8 +111,10 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
                     updated,
                     f"Upgrade {pkg} from {installed} to fixed version {target_ver}",
                 )
+    return None
 
-    # Case 3: Missing variable in .env.example
+
+def _fix_env_setup(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
     if finding.module == "setup_doctor" and finding.rule == "env-missing-from-example":
         var = (finding.metadata or {}).get("variable")
         example_file = (finding.metadata or {}).get("example_file") or ".env.example"
@@ -126,8 +128,6 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
                 updated,
                 f"Document `{var}=` placeholder in {example_file}",
             )
-
-    # Case 4: Missing .env.example altogether
     if finding.module == "setup_doctor" and finding.rule == "env-example-missing":
         variables = (finding.metadata or {}).get("variables") or []
         example_file = ".env.example"
@@ -140,7 +140,46 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
             content,
             f"Create {example_file} with placeholders for {len(variables)} variables",
         )
+    return None
 
+
+def _fix_android(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
+    if not finding.file:
+        return None
+    orig = ctx.read_text(finding.file)
+    if not orig:
+        return None
+    if finding.rule == "android-cleartext-traffic" and 'android:usesCleartextTraffic="true"' in orig:
+        updated = orig.replace(
+            'android:usesCleartextTraffic="true"', 'android:usesCleartextTraffic="false"', 1
+        )
+        return (
+            finding.file,
+            orig,
+            updated,
+            "Disable cleartext HTTP traffic in AndroidManifest.xml (enforce HTTPS)",
+        )
+    if finding.rule == "android-allow-backup" and 'android:allowBackup="true"' in orig:
+        updated = orig.replace('android:allowBackup="true"', 'android:allowBackup="false"', 1)
+        return finding.file, orig, updated, "Disable adb backup in AndroidManifest.xml"
+    if finding.rule == "android-debuggable" and 'android:debuggable="true"' in orig:
+        updated = orig.replace('android:debuggable="true"', 'android:debuggable="false"', 1)
+        return finding.file, orig, updated, "Set android:debuggable='false' in AndroidManifest.xml"
+    if finding.rule == "android-insecure-repo-url":
+        url = (finding.metadata or {}).get("url")
+        if url and url in orig and url.startswith("http://"):
+            secure_url = "https://" + url[len("http://") :]
+            updated = orig.replace(url, secure_url, 1)
+            return finding.file, orig, updated, f"Upgrade repository URL `{url}` to secure HTTPS"
+    return None
+
+
+def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str, str, str] | None:
+    """Return `(target_file, original_text, updated_text, summary)` if a safe deterministic fix exists."""
+    for fn in (_fix_ruff, _fix_vulnerable_dep, _fix_env_setup, _fix_android):
+        res = fn(ctx, finding)
+        if res is not None:
+            return res
     return None
 
 

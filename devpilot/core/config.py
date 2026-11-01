@@ -68,6 +68,7 @@ class ToggleConfig(BaseModel):
 
 
 class AnalyzersConfig(BaseModel):
+    android: ToggleConfig = Field(default_factory=ToggleConfig)
     code_health: CodeHealthConfig = Field(default_factory=CodeHealthConfig)
     dependencies: DependencyConfig = Field(default_factory=DependencyConfig)
     setup_doctor: ToggleConfig = Field(default_factory=ToggleConfig)

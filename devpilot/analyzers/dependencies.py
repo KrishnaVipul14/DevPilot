@@ -38,11 +38,18 @@ def vuln_severity(vuln: dict) -> tuple[Severity, str, Confidence]:
     return Severity.MEDIUM, "severity not published; defaulted to medium", Confidence.MEDIUM
 
 
-def fixed_versions(vuln: dict, package: str) -> list[str]:
+def fixed_versions(vuln: dict, package: str, ecosystem: str = "PyPI") -> list[str]:
     fixed: list[str] = []
     for affected in vuln.get("affected", []) or []:
         pkg = affected.get("package") or {}
-        if pkg.get("ecosystem") != "PyPI" or normalize_name(pkg.get("name", "")) != package:
+        aff_eco = str(pkg.get("ecosystem", "")).lower()
+        if aff_eco != ecosystem.lower():
+            continue
+        aff_name = str(pkg.get("name", ""))
+        if ecosystem.lower() == "pypi":
+            if normalize_name(aff_name) != package:
+                continue
+        elif aff_name.lower() != package.lower():
             continue
         for rng in affected.get("ranges", []) or []:
             for event in rng.get("events", []) or []:
@@ -97,9 +104,10 @@ class DependencyAnalyzer(Analyzer):
             out.message = f"Offline mode: {len(pinned)} pinned dependencies were not audited"
             return out
         cfg = ctx.config.analyzers.dependencies
-        unique = sorted({(d.name, d.version or "") for d in pinned})
+        unique = sorted({(d.name, d.version or "", d.ecosystem) for d in pinned})
         if cfg.engine == "pip-audit":
-            vuln_ids = self._pip_audit_ids(ctx, unique, cfg.timeout)
+            pypi_unique = [(n, v) for n, v, eco in unique if eco.lower() == "pypi"]
+            vuln_ids = self._pip_audit_ids(ctx, pypi_unique, cfg.timeout)
         else:
             try:
                 vuln_ids = dict(zip(unique, query_batch(unique, timeout=cfg.timeout), strict=False))
@@ -110,7 +118,7 @@ class DependencyAnalyzer(Analyzer):
         all_ids = [vid for ids in vuln_ids.values() for vid in ids]
         details = get_vulns(all_ids, timeout=cfg.timeout) if all_ids else {}
         for dep in pinned:
-            for vuln in dedupe_vulns(vuln_ids.get((dep.name, dep.version or ""), []), details):
+            for vuln in dedupe_vulns(vuln_ids.get((dep.name, dep.version or "", dep.ecosystem), []), details):
                 self._vuln_finding(dep, vuln, out)
         if cfg.check_outdated:
             self._outdated(pinned, out, cfg.timeout)
@@ -149,7 +157,7 @@ class DependencyAnalyzer(Analyzer):
         ids = vuln.get("_all_ids") or [vuln.get("id", "unknown")]
         primary = next((i for i in ids if i.startswith("GHSA")), vuln.get("id", ids[0]))
         cves = [i for i in ids if i.startswith("CVE-")]
-        fixes = fixed_versions(vuln, dep.name)
+        fixes = fixed_versions(vuln, dep.name, ecosystem=dep.ecosystem)
         summary = (vuln.get("summary") or (vuln.get("details") or "").split("\n")[0])[:240]
         upgrade = (
             f"Upgrade {dep.name} to {fixes[0]} or later"
