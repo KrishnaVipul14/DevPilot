@@ -713,3 +713,138 @@ MIIEowIBAAKCAQEA0Yq3...
     assert report.summary.by_severity["critical"] >= 1
     # Health score must reflect the 25-point penalty for critical issues
     assert report.summary.health_score <= 75
+
+
+def test_react_project_module_and_env_discovery(tmp_path: Path) -> None:
+    repo = tmp_path / "react_web_app"
+    repo.mkdir()
+
+    # package.json
+    pkg = {
+        "name": "my-react-app",
+        "version": "1.0.0",
+        "dependencies": {
+            "react": "^18.2.0",
+            "react-dom": "^18.2.0",
+        },
+    }
+    (repo / "package.json").write_text(json.dumps(pkg, indent=2), encoding="utf-8")
+
+    # .env.example
+    env_example = """# React & Vite environment variables
+REACT_APP_API_URL=https://api.example.com
+VITE_AUTH_TOKEN=secret-token-here
+REACT_APP_FEATURE_FLAG=true
+STALE_UNUSED_CONFIG=unused_val
+"""
+    (repo / ".env.example").write_text(env_example, encoding="utf-8")
+
+    # src/components/Header.jsx
+    src = repo / "src"
+    src.mkdir()
+    components = src / "components"
+    components.mkdir()
+
+    header_jsx = """
+import React from 'react';
+import './Header.css';
+
+export default function Header({ title }) {
+    return <header><h1>{title}</h1></header>;
+}
+
+export const Navigation = () => {
+    return <nav><a href="/">Home</a></nav>;
+};
+"""
+    (components / "Header.jsx").write_text(header_jsx, encoding="utf-8")
+
+    # src/App.jsx
+    app_jsx = """
+import React, { useState, useEffect } from 'react';
+import Header, { Navigation } from './components/Header';
+import { fetchConfig } from './api';
+
+export class ErrorBoundary extends React.Component {
+    render() {
+        return this.props.children;
+    }
+}
+
+export const App = () => {
+    const apiUrl = process.env.REACT_APP_API_URL;
+    const isFeatureEnabled = process.env['REACT_APP_FEATURE_FLAG'] || 'false';
+    const stripeKey = process.env.REACT_APP_STRIPE_KEY;
+
+    return (
+        <ErrorBoundary>
+            <Header title="React App" />
+            <Navigation />
+            <div>API: {apiUrl}</div>
+        </ErrorBoundary>
+    );
+};
+
+export default App;
+"""
+    (src / "App.jsx").write_text(app_jsx, encoding="utf-8")
+
+    # src/api.ts
+    api_ts = """
+import axios from 'axios';
+
+export async function fetchConfig() {
+    const token = import.meta.env.VITE_AUTH_TOKEN;
+    const client = import.meta.env['VITE_CLIENT_ID'] ?? 'default_client';
+    return { token, client };
+}
+"""
+    (src / "api.ts").write_text(api_ts, encoding="utf-8")
+
+    # Scan the React project
+    report = run_scan(repo, offline=True, persist=True)
+
+    # 1. Module and component discovery assertions
+    assert report.graph is not None
+    # Must discover React modules (Header.jsx, App.jsx, api.ts)
+    assert report.graph.modules >= 3
+    # Must discover functions and React functional components (Header, Navigation, App, fetchConfig)
+    assert report.graph.functions >= 4
+    # Must discover classes (ErrorBoundary)
+    assert report.graph.classes >= 1
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    graph = RepoGraph.build(ctx)
+
+    node_names = {n.name for n in graph.nodes.values()}
+    assert "Header" in node_names
+    assert "Navigation" in node_names
+    assert "App" in node_names
+    assert "fetchConfig" in node_names
+    assert "ErrorBoundary" in node_names
+
+    # Check import edges exist
+    import_edges = [e for e in graph.edges if e.kind == "imports"]
+    assert len(import_edges) >= 2
+
+    # 2. .env.example analysis assertions
+    setup_findings = [f for f in report.findings if f.module == "setup_doctor"]
+    unused_env_findings = [f for f in setup_findings if f.rule == "env-unused-in-code"]
+    unused_vars = {f.metadata.get("variable") for f in unused_env_findings}
+
+    # REACT_APP_API_URL, VITE_AUTH_TOKEN, REACT_APP_FEATURE_FLAG are used in JS/TS!
+    # They MUST NOT be flagged as unused
+    assert "REACT_APP_API_URL" not in unused_vars
+    assert "VITE_AUTH_TOKEN" not in unused_vars
+    assert "REACT_APP_FEATURE_FLAG" not in unused_vars
+
+    # STALE_UNUSED_CONFIG is never used, so it SHOULD be flagged
+    assert "STALE_UNUSED_CONFIG" in unused_vars
+    stale_f = next(f for f in unused_env_findings if f.metadata.get("variable") == "STALE_UNUSED_CONFIG")
+    # Message should refer to JavaScript/TypeScript code, not Python code
+    assert "JavaScript/TypeScript" in stale_f.title
+
+    # REACT_APP_STRIPE_KEY is used in App.jsx without default and missing from .env.example
+    missing_env_findings = [f for f in setup_findings if f.rule == "env-missing-from-example"]
+    missing_vars = {f.metadata.get("variable") for f in missing_env_findings}
+    assert "REACT_APP_STRIPE_KEY" in missing_vars

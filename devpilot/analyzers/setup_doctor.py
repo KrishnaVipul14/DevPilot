@@ -16,6 +16,7 @@ from devpilot.analyzers.base import Analyzer, AnalyzerOutput
 from devpilot.analyzers.envsecrets import (
     EnvUsage,
     env_usages,
+    js_env_usages,
     parse_env_keys,
     scan_python_for_secrets,
     scan_text_for_secrets,
@@ -105,6 +106,10 @@ class SetupDoctorAnalyzer(Analyzer):
             tree = ctx.parse(rel)
             if tree is not None:
                 usages.extend(u for u in env_usages(tree, rel) if u.name not in PLATFORM_VARS)
+        for rel in ctx.js_ts_files:
+            text = ctx.read_text(rel)
+            if text:
+                usages.extend(u for u in js_env_usages(text, rel) if u.name not in PLATFORM_VARS)
         return usages
 
     def _check_env_example(self, ctx: RepoContext, usages: list[EnvUsage], out: AnalyzerOutput) -> None:
@@ -165,6 +170,11 @@ class SetupDoctorAnalyzer(Analyzer):
                 anchor=f"env:{name}",
             )
         used = set(by_name)
+        lang_label = (
+            "Python or JavaScript"
+            if ctx.js_ts_files and ctx.python_files
+            else ("JavaScript/TypeScript" if ctx.js_ts_files else "Python")
+        )
         for name, line in keys.items():
             if name not in used:
                 out.add(
@@ -172,11 +182,11 @@ class SetupDoctorAnalyzer(Analyzer):
                         module=self.name,
                         rule="env-unused-in-code",
                         severity=Severity.INFO,
-                        title=f"{name} is documented in {example} but not referenced in Python code",
+                        title=f"{name} is documented in {example} but not referenced in {lang_label} code",
                         file=example,
                         line=line,
-                        evidence=f"No os.environ/os.getenv reference to `{name}` was found in analyzed Python files.",
-                        suggestion="Remove the stale variable, or ignore this if it is consumed by tooling outside Python.",
+                        evidence=f"No environment variable reference to `{name}` was found in analyzed source files.",
+                        suggestion="Remove the stale variable, or ignore this if it is consumed by tooling outside application code.",
                         confidence=Confidence.MEDIUM,
                         metadata={"variable": name},
                     ),
