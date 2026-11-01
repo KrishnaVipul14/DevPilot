@@ -44,3 +44,16 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 extend-exclude = ["examples", "dashboard"]
+
+[tool.ruff.lint]
+select = ["F", "E9", "E722", "B", "C901", "S102", "S307", "S602", "S506"]
+flake8-bugbear.extend-immutable-calls = [
+    "typer.Argument",
+    "typer.Option",
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+]
+mccabe.max-complexity = 15

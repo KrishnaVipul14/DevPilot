@@ -116,8 +116,8 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
     if finding.module == "setup_doctor" and finding.rule == "env-missing-from-example":
         var = (finding.metadata or {}).get("variable")
         example_file = (finding.metadata or {}).get("example_file") or ".env.example"
-        orig = ctx.read_text(example_file)
-        if var and orig is not None and f"{var}=" not in orig:
+        orig = ctx.read_text(example_file) or ""
+        if var and f"{var}=" not in orig:
             suffix = "" if orig.endswith("\n") or not orig else "\n"
             updated = f"{orig}{suffix}{var}=\n"
             return (
@@ -126,6 +126,20 @@ def _try_deterministic_fix(ctx: RepoContext, finding: Finding) -> tuple[str, str
                 updated,
                 f"Document `{var}=` placeholder in {example_file}",
             )
+
+    # Case 4: Missing .env.example altogether
+    if finding.module == "setup_doctor" and finding.rule == "env-example-missing":
+        variables = (finding.metadata or {}).get("variables") or []
+        example_file = ".env.example"
+        orig = ctx.read_text(example_file) or ""
+        lines = [f"{v}=" for v in sorted(variables)]
+        content = "\n".join(lines) + ("\n" if lines else "")
+        return (
+            example_file,
+            orig,
+            content,
+            f"Create {example_file} with placeholders for {len(variables)} variables",
+        )
 
     return None
 

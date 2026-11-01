@@ -61,63 +61,45 @@ def explain_finding(
     return explanation
 
 
-def build_deterministic_plan(ctx: RepoContext, report: Report, graph: RepoGraph | None = None) -> dict[str, Any]:
-    """Build a structured, prioritized engineering action plan without requiring an LLM."""
-    graph = graph or RepoGraph.build(ctx)
-    all_tests = [
-        str(n.meta.get("nodeid") or f"{n.file}::{n.name}")
-        for n in graph.nodes.values()
-        if n.kind == "test"
-    ]
-    default_test_cmd = f"pytest {' '.join(sorted({t.split('::')[0] for t in all_tests[:4]}))}" if all_tests else "pytest"
-
+def _categorize_findings(findings: list[Finding]) -> list[tuple[str, str, str, list[Finding], str]]:
     buckets: list[tuple[str, str, str, list[Finding], str]] = []
 
-    # 1. Critical / High Code Health (runtime errors like F821 undefined name, syntax errors, dangerous eval/exec)
-    runtime_bugs = [
-        f for f in report.findings
-        if f.module == "code_health" and f.severity.value in ("critical", "high")
-    ]
+    # 1. Critical / High Code Health
+    runtime_bugs = [f for f in findings if f.module == "code_health" and f.severity.value in ("critical", "high")]
     if runtime_bugs:
         buckets.append((
             "Fix high-severity code defects and undefined names",
-            "Undefined names (F821), syntax errors, and unsafe execution primitives can cause immediate runtime crashes or security vulnerabilities.",
+            "Undefined names (F821), syntax errors, and unsafe execution primitives can cause crashes or vulnerabilities.",
             "Resolve each undefined identifier or unsafe call reported by Ruff and run the test suite.",
             runtime_bugs,
             "small" if len(runtime_bugs) <= 3 else "medium",
         ))
 
     # 2. Vulnerable dependencies
-    vuln_deps = [
-        f for f in report.findings
-        if f.module == "dependencies" and f.rule == "vulnerable-dependency"
-    ]
+    vuln_deps = [f for f in findings if f.module == "dependencies" and f.rule == "vulnerable-dependency"]
     if vuln_deps:
         pkgs = ", ".join(sorted({str(f.metadata.get("package") or f.title.split()[0]) for f in vuln_deps}))
         buckets.append((
             f"Upgrade vulnerable dependencies ({pkgs})",
             "Known security advisories (CVEs/GHSAs) exist in pinned dependency versions.",
-            "Update the affected package versions in requirements.txt / pyproject.toml to the recommended fixed versions and run regression tests.",
+            "Update affected package versions in requirements.txt / pyproject.toml and run regression tests.",
             vuln_deps,
             "small",
         ))
 
     # 3. Secrets & configuration hygiene
-    setup_issues = [
-        f for f in report.findings
-        if f.module == "setup_doctor"
-    ]
+    setup_issues = [f for f in findings if f.module == "setup_doctor"]
     if setup_issues:
         buckets.append((
             "Align environment configuration and secret hygiene",
             "Missing `.env.example` entries or hardcoded credentials cause onboarding failures and secret leakage risks.",
-            "Document all required environment variables in `.env.example` with safe placeholders and move any secrets to environment variables.",
+            "Document all required environment variables in `.env.example` and move secrets to environment variables.",
             setup_issues,
             "small",
         ))
 
     # 4. Documentation drift
-    doc_issues = [f for f in report.findings if f.module == "documentation"]
+    doc_issues = [f for f in findings if f.module == "documentation"]
     if doc_issues:
         buckets.append((
             "Synchronize README examples and docstrings with code signatures",
@@ -127,11 +109,8 @@ def build_deterministic_plan(ctx: RepoContext, report: Report, graph: RepoGraph 
             "small",
         ))
 
-    # 5. Remaining maintainability & cleanup (unused imports, complexity, etc.)
-    cleanup_issues = [
-        f for f in report.findings
-        if f.module == "code_health" and f.severity.value not in ("critical", "high")
-    ]
+    # 5. Remaining maintainability & cleanup
+    cleanup_issues = [f for f in findings if f.module == "code_health" and f.severity.value not in ("critical", "high")]
     if cleanup_issues:
         buckets.append((
             "Clean up unused imports and maintainability warnings",
@@ -140,6 +119,20 @@ def build_deterministic_plan(ctx: RepoContext, report: Report, graph: RepoGraph 
             cleanup_issues,
             "small" if len(cleanup_issues) <= 8 else "medium",
         ))
+
+    return buckets
+
+
+def build_deterministic_plan(ctx: RepoContext, report: Report, graph: RepoGraph | None = None) -> dict[str, Any]:
+    """Build a structured, prioritized engineering action plan without requiring an LLM."""
+    graph = graph or RepoGraph.build(ctx)
+    all_tests = [
+        str(n.meta.get("nodeid") or f"{n.file}::{n.name}")
+        for n in graph.nodes.values()
+        if n.kind == "test"
+    ]
+    default_test_cmd = f"pytest {' '.join(sorted({t.split('::')[0] for t in all_tests[:4]}))}" if all_tests else "pytest"
+    buckets = _categorize_findings(report.findings)
 
     tasks: list[dict[str, Any]] = []
     for idx, (title, why, resolution, group, effort) in enumerate(buckets, start=1):

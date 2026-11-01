@@ -101,6 +101,56 @@ class MemoryDB:
         with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
 
+    def _get_verification_map(self, conn: sqlite3.Connection) -> dict[str, str]:
+        ver_map: dict[str, str] = {}
+        for r in conn.execute("SELECT fingerprint, status FROM patches ORDER BY created_at ASC"):
+            if r["status"] in ("verified", "partially_verified", "failed", "applied"):
+                ver_map[r["fingerprint"]] = "verified" if r["status"] == "applied" else r["status"]
+        return ver_map
+
+    def _persist_scan_and_sightings(
+        self, conn: sqlite3.Connection, report: Report, delta: MemoryDelta
+    ) -> None:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO scans (
+                scan_id, started_at, finished_at, commit_hash, branch, status,
+                total, health_score, by_severity_json,
+                new_count, existing_count, resolved_count, reintroduced_count, severity_changed_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report.scan_id,
+                report.started_at.isoformat(),
+                report.finished_at.isoformat(),
+                report.repository.commit,
+                report.repository.branch,
+                report.status.value,
+                report.summary.total,
+                report.summary.health_score,
+                json.dumps(report.summary.by_severity),
+                delta.new,
+                delta.existing,
+                delta.resolved,
+                delta.reintroduced,
+                delta.severity_changed,
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO finding_sightings (
+                scan_id, fingerprint, finding_id, module, rule, severity, title, file, line, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    report.scan_id, f.fingerprint, f.id, f.module, f.rule,
+                    f.severity.value, f.title, f.file, f.line, f.status.value,
+                )
+                for f in report.findings
+            ],
+        )
+
     def classify_and_record(self, report: Report) -> MemoryDelta:
         """Compare `report.findings` against previous scans, set `finding.status` and
         `finding.verification`, persist the scan, and return the `MemoryDelta`."""
@@ -121,17 +171,7 @@ class MemoryDB:
                 r["fingerprint"]
                 for r in conn.execute("SELECT DISTINCT fingerprint FROM finding_sightings")
             }
-
-            # Verification status from latest verified patch per fingerprint
-            ver_map: dict[str, str] = {}
-            for r in conn.execute(
-                "SELECT fingerprint, status FROM patches ORDER BY created_at ASC"
-            ):
-                if r["status"] in ("verified", "partially_verified", "failed", "applied"):
-                    ver_map[r["fingerprint"]] = (
-                        "verified" if r["status"] == "applied" else r["status"]
-                    )
-
+            ver_map = self._get_verification_map(conn)
             new_c = existing_c = reintro_c = sev_changed_c = 0
             current_fps: set[str] = set()
 
@@ -158,20 +198,20 @@ class MemoryDB:
                     f.status = FindingStatus.NEW
                     new_c += 1
 
-            resolved_list: list[dict[str, Any]] = []
-            if prev_scan_id:
-                for fp, row in prev_fps.items():
-                    if fp not in current_fps:
-                        resolved_list.append({
-                            "fingerprint": fp,
-                            "id": row["finding_id"],
-                            "module": row["module"],
-                            "rule": row["rule"],
-                            "severity": row["severity"],
-                            "title": row["title"],
-                            "file": row["file"],
-                            "line": row["line"],
-                        })
+            resolved_list = [
+                {
+                    "fingerprint": fp,
+                    "id": row["finding_id"],
+                    "module": row["module"],
+                    "rule": row["rule"],
+                    "severity": row["severity"],
+                    "title": row["title"],
+                    "file": row["file"],
+                    "line": row["line"],
+                }
+                for fp, row in prev_fps.items()
+                if fp not in current_fps
+            ]
 
             delta = MemoryDelta(
                 previous_scan_id=prev_scan_id,
@@ -182,47 +222,7 @@ class MemoryDB:
                 severity_changed=sev_changed_c,
                 resolved_findings=resolved_list,
             )
-
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO scans (
-                    scan_id, started_at, finished_at, commit_hash, branch, status,
-                    total, health_score, by_severity_json,
-                    new_count, existing_count, resolved_count, reintroduced_count, severity_changed_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    report.scan_id,
-                    report.started_at.isoformat(),
-                    report.finished_at.isoformat(),
-                    report.repository.commit,
-                    report.repository.branch,
-                    report.status.value,
-                    report.summary.total,
-                    report.summary.health_score,
-                    json.dumps(report.summary.by_severity),
-                    delta.new,
-                    delta.existing,
-                    delta.resolved,
-                    delta.reintroduced,
-                    delta.severity_changed,
-                ),
-            )
-
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO finding_sightings (
-                    scan_id, fingerprint, finding_id, module, rule, severity, title, file, line, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        report.scan_id, f.fingerprint, f.id, f.module, f.rule,
-                        f.severity.value, f.title, f.file, f.line, f.status.value,
-                    )
-                    for f in report.findings
-                ],
-            )
+            self._persist_scan_and_sightings(conn, report, delta)
             return delta
 
     def save_explanation(self, exp: AIExplanation) -> None:

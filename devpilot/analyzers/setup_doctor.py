@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 
 from devpilot.analyzers.base import Analyzer, AnalyzerOutput
 from devpilot.analyzers.envsecrets import (
@@ -57,7 +59,9 @@ class SetupDoctorAnalyzer(Analyzer):
         return usages
 
     def _check_env_example(self, ctx: RepoContext, usages: list[EnvUsage], out: AnalyzerOutput) -> None:
-        examples = [f for f in ctx.files if f.rsplit("/", 1)[-1] in ENV_EXAMPLE_NAMES and "/" not in f]
+        root_examples = [f for f in ctx.files if f in ENV_EXAMPLE_NAMES]
+        all_examples = [f for f in ctx.files if f.rsplit("/", 1)[-1] in ENV_EXAMPLE_NAMES]
+        examples = root_examples or all_examples
         by_name: dict[str, list[EnvUsage]] = {}
         for u in usages:
             by_name.setdefault(u.name, []).append(u)
@@ -72,7 +76,7 @@ class SetupDoctorAnalyzer(Analyzer):
                     evidence=(f"{len(by_name)} variables referenced in code ({', '.join(sorted(by_name)[:10])}); "
                               f"{len(required)} have no default."),
                     suggestion="Add a .env.example listing every variable with a placeholder value and document it in the README.",
-                    confidence=Confidence.HIGH, metadata={"variables": sorted(by_name), "required": required},
+                    confidence=Confidence.HIGH, fixable=True, metadata={"variables": sorted(by_name), "required": required},
                 ), anchor="env-example-missing")
             return
         example = examples[0]
@@ -90,7 +94,7 @@ class SetupDoctorAnalyzer(Analyzer):
                 evidence=(f"`{name}` is read at {', '.join(f'{x.file}:{x.line}' for x in us[:3])}"
                           f"{' without a default value' if required else ' (has a default)'}; not listed in {example}."),
                 suggestion=f"Add `{name}=` with a placeholder value to {example} and document its purpose.",
-                confidence=Confidence.HIGH, metadata={"variable": name, "required": required, "example_file": example},
+                confidence=Confidence.HIGH, fixable=True, metadata={"variable": name, "required": required, "example_file": example},
             ), anchor=f"env:{name}")
         used = set(by_name)
         for name, line in keys.items():
@@ -106,10 +110,19 @@ class SetupDoctorAnalyzer(Analyzer):
 
     def _check_env_files(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
         # Never open .env files - only check presence, git tracking and ignore status.
-        candidates = [p for p in ctx.root.glob(".env*") if p.is_file() and p.name not in ENV_EXAMPLE_NAMES]
+        candidates: list[Path] = []
+        excludes = set(ctx.config.all_excludes)
+        for root_dir, dirnames, filenames in os.walk(ctx.root):
+            dirnames[:] = [d for d in dirnames if d not in excludes and not d.startswith(".git")]
+            for fname in filenames:
+                if fname.startswith(".env") and fname not in ENV_EXAMPLE_NAMES:
+                    candidates.append(Path(root_dir) / fname)
         tracked = gitutil.tracked_files(ctx.root) if ctx.git_root else None
-        for path in candidates:
-            rel = path.name
+        for path in sorted(candidates):
+            try:
+                rel = path.relative_to(ctx.root).as_posix()
+            except ValueError:
+                rel = path.name
             if tracked is not None and self._tracked(ctx, rel, tracked):
                 out.add(Finding(
                     module=self.name, rule="env-file-committed", severity=Severity.CRITICAL,

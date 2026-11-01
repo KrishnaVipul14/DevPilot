@@ -15,6 +15,25 @@ from devpilot.dashboard_server.api import APIHTTPError, LocalAPI
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 
+STATIC_MIME_TYPES: dict[str, str] = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain; charset=utf-8",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".wasm": "application/wasm",
+}
+
 _EXPLAIN_RE = re.compile(r"^/api/findings/([^/]+)/explain/?$")
 _FIX_RE = re.compile(r"^/api/findings/([^/]+)/fix/?$")
 _PATCH_ACTION_RE = re.compile(r"^/api/patches/([^/]+)/(verify|apply|discard)/?$")
@@ -124,7 +143,11 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": f"Internal error: {exc}"})
 
     def _serve_static(self, url_path: str) -> None:
-        clean = urllib.parse.unquote(url_path).lstrip("/")
+        clean = urllib.parse.unquote(url_path).lstrip("/").replace("\\", "/")
+        if ".." in clean.split("/"):
+            self._send_json(403, {"error": "Forbidden path traversal"})
+            return
+
         static_root = self.static_dir.resolve()
         candidates = [
             static_root / clean,
@@ -150,7 +173,10 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": f"Not found: {url_path}"})
                 return
 
-        ctype, _ = mimetypes.guess_type(str(target))
+        ext = target.suffix.lower()
+        ctype = STATIC_MIME_TYPES.get(ext)
+        if not ctype:
+            ctype, _ = mimetypes.guess_type(str(target))
         data = target.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", ctype or "application/octet-stream")

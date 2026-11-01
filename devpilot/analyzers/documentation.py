@@ -55,6 +55,33 @@ def _extract_docstring_params(doc: str) -> set[str]:
     return params
 
 
+def _check_call_mismatch(target: dict[str, Any], call: ast.Call) -> str | None:
+    meta = target["meta"]
+    is_method = "." in target["name"]
+    pos_params = [p for p in meta.get("positional", []) if p not in ("self", "cls")]
+    req_params = list(meta.get("required", []))
+    kwonly = list(meta.get("kwonly", []))
+    has_varargs = bool(meta.get("varargs"))
+    has_varkw = bool(meta.get("varkw"))
+    all_allowed = set(pos_params) | set(kwonly)
+
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
+        return None
+    n_pos = len(call.args)
+    kw_names = [k.arg for k in call.keywords if k.arg is not None]
+
+    unknown_kw = [k for k in kw_names if k not in all_allowed] if not has_varkw else []
+    if unknown_kw:
+        return f"passes unknown keyword argument(s) {', '.join(f'`{k}`' for k in unknown_kw)}"
+    if not has_varargs and n_pos > len(pos_params):
+        return f"passes {n_pos} positional arguments, but `{target['name']}` accepts at most {len(pos_params)}"
+    bound = set(pos_params[:n_pos]) | set(kw_names)
+    missing_req = [p for p in req_params + list(meta.get("kwonly_required", [])) if p not in bound]
+    if missing_req and not (is_method and isinstance(call.func, ast.Name)):
+        return f"omits required argument(s) {', '.join(f'`{p}`' for p in missing_req)}"
+    return None
+
+
 class DocumentationAnalyzer(Analyzer):
     name = "documentation"
     description = "Docstring parameter drift, outdated README code examples, and documented env mismatch"
@@ -103,6 +130,63 @@ class DocumentationAnalyzer(Analyzer):
                         metadata={"symbol": qual, "stale_params": stale, "actual_params": sorted(actual)},
                     ), anchor=f"docparam:{qual}:{','.join(stale)}")
 
+    def _check_fence_block(
+        self, rel: str, text: str, match: re.Match[str], fn_by_name: dict[str, list[dict[str, Any]]], out: AnalyzerOutput
+    ) -> None:
+        lang = (match.group(1) or "").lower()
+        code = match.group(2)
+        fence_line = text[:match.start()].count("\n") + 1
+        if lang not in ("python", "py"):
+            return
+        cleaned_lines = []
+        for line in code.splitlines():
+            if line.lstrip().startswith(">>> ") or line.lstrip().startswith("... "):
+                cleaned_lines.append(line.lstrip()[4:])
+            elif not line.lstrip().startswith(">>>"):
+                cleaned_lines.append(line)
+        cleaned = "\n".join(cleaned_lines)
+        try:
+            block_tree = ast.parse(cleaned)
+        except SyntaxError as exc:
+            out.add(Finding(
+                module=self.name, rule="readme-example-syntax-error", severity=Severity.LOW,
+                title=f"Python example in {rel} has a syntax error",
+                file=rel, line=fence_line + (exc.lineno or 1),
+                evidence=f"SyntaxError in fenced Python block starting at line {fence_line}: {exc.msg}",
+                suggestion="Fix the Python code example in the documentation so it parses cleanly.",
+                confidence=Confidence.MEDIUM,
+            ), anchor=f"md-syntax:{rel}:{fence_line}")
+            return
+
+        for call in ast.walk(block_tree):
+            if not isinstance(call, ast.Call):
+                continue
+            fn_name = (
+                call.func.id if isinstance(call.func, ast.Name)
+                else call.func.attr if isinstance(call.func, ast.Attribute)
+                else None
+            )
+            if not fn_name or fn_name not in fn_by_name:
+                continue
+            candidates = fn_by_name[fn_name]
+            if len(candidates) != 1:
+                continue
+            target = candidates[0]
+            issue_reason = _check_call_mismatch(target, call)
+            if issue_reason:
+                call_line = fence_line + getattr(call, "lineno", 1)
+                sig = target["meta"].get("signature", f"{fn_name}(...)")
+                out.add(Finding(
+                    module=self.name, rule="readme-outdated-example", severity=Severity.MEDIUM,
+                    title=f"Documentation example calls `{fn_name}()` with outdated signature",
+                    file=rel, line=call_line, symbol=target["name"],
+                    evidence=(f"Example in {rel}:{call_line} {issue_reason}.\n"
+                              f"Actual signature in {target['file']}: `def {sig}`"),
+                    suggestion=f"Update the example in {rel} to match `def {sig}`.",
+                    confidence=Confidence.HIGH,
+                    metadata={"function": target["id"], "signature": sig, "definition_file": target["file"]},
+                ), anchor=f"md-call:{rel}:{fn_name}:{issue_reason}")
+
     def _check_markdown_examples(self, ctx: RepoContext, graph: RepoGraph, out: AnalyzerOutput) -> None:
         # Index unique function names in repository (excluding tests and dunder methods)
         fn_by_name: dict[str, list[dict[str, Any]]] = {}
@@ -117,85 +201,7 @@ class DocumentationAnalyzer(Analyzer):
             if not text:
                 continue
             for match in _FENCE_RE.finditer(text):
-                lang = (match.group(1) or "").lower()
-                code = match.group(2)
-                fence_line = text[:match.start()].count("\n") + 1
-                if lang not in ("python", "py"):
-                    continue
-                # Strip leading >>> / ... prompts if doctest style
-                cleaned_lines = []
-                for line in code.splitlines():
-                    if line.lstrip().startswith(">>> ") or line.lstrip().startswith("... "):
-                        cleaned_lines.append(line.lstrip()[4:])
-                    elif not line.lstrip().startswith(">>>"):
-                        cleaned_lines.append(line)
-                cleaned = "\n".join(cleaned_lines)
-                try:
-                    block_tree = ast.parse(cleaned)
-                except SyntaxError as exc:
-                    out.add(Finding(
-                        module=self.name, rule="readme-example-syntax-error", severity=Severity.LOW,
-                        title=f"Python example in {rel} has a syntax error",
-                        file=rel, line=fence_line + (exc.lineno or 1),
-                        evidence=f"SyntaxError in fenced Python block starting at line {fence_line}: {exc.msg}",
-                        suggestion="Fix the Python code example in the documentation so it parses cleanly.",
-                        confidence=Confidence.MEDIUM,
-                    ), anchor=f"md-syntax:{rel}:{fence_line}")
-                    continue
-
-                for call in ast.walk(block_tree):
-                    if not isinstance(call, ast.Call):
-                        continue
-                    fn_name = (
-                        call.func.id if isinstance(call.func, ast.Name)
-                        else call.func.attr if isinstance(call.func, ast.Attribute)
-                        else None
-                    )
-                    if not fn_name or fn_name not in fn_by_name:
-                        continue
-                    candidates = fn_by_name[fn_name]
-                    if len(candidates) != 1:
-                        continue
-                    target = candidates[0]
-                    meta = target["meta"]
-                    is_method = "." in target["name"]
-                    pos_params = [p for p in meta.get("positional", []) if p not in ("self", "cls")]
-                    req_params = list(meta.get("required", []))
-                    kwonly = list(meta.get("kwonly", []))
-                    has_varargs = bool(meta.get("varargs"))
-                    has_varkw = bool(meta.get("varkw"))
-                    all_allowed = set(pos_params) | set(kwonly)
-
-                    if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
-                        continue
-                    n_pos = len(call.args)
-                    kw_names = [k.arg for k in call.keywords if k.arg is not None]
-
-                    issue_reason: str | None = None
-                    unknown_kw = [k for k in kw_names if k not in all_allowed] if not has_varkw else []
-                    if unknown_kw:
-                        issue_reason = f"passes unknown keyword argument(s) {', '.join(f'`{k}`' for k in unknown_kw)}"
-                    elif not has_varargs and n_pos > len(pos_params):
-                        issue_reason = f"passes {n_pos} positional arguments, but `{target['name']}` accepts at most {len(pos_params)}"
-                    else:
-                        bound = set(pos_params[:n_pos]) | set(kw_names)
-                        missing_req = [p for p in req_params + list(meta.get("kwonly_required", [])) if p not in bound]
-                        if missing_req and not (is_method and isinstance(call.func, ast.Name)):
-                            issue_reason = f"omits required argument(s) {', '.join(f'`{p}`' for p in missing_req)}"
-
-                    if issue_reason:
-                        call_line = fence_line + getattr(call, "lineno", 1)
-                        sig = meta.get("signature", f"{fn_name}(...)")
-                        out.add(Finding(
-                            module=self.name, rule="readme-outdated-example", severity=Severity.MEDIUM,
-                            title=f"Documentation example calls `{fn_name}()` with outdated signature",
-                            file=rel, line=call_line, symbol=target["name"],
-                            evidence=(f"Example in {rel}:{call_line} {issue_reason}.\n"
-                                      f"Actual signature in {target['file']}: `def {sig}`"),
-                            suggestion=f"Update the example in {rel} to match `def {sig}`.",
-                            confidence=Confidence.HIGH,
-                            metadata={"function": target["id"], "signature": sig, "definition_file": target["file"]},
-                        ), anchor=f"md-call:{rel}:{fn_name}:{issue_reason}")
+                self._check_fence_block(rel, text, match, fn_by_name, out)
 
     def _check_documented_env_vars(self, ctx: RepoContext, out: AnalyzerOutput) -> None:
         code_vars: set[str] = set()
@@ -203,7 +209,9 @@ class DocumentationAnalyzer(Analyzer):
             tree = ctx.parse(rel)
             if tree is not None:
                 code_vars.update(u.name for u in env_usages(tree, rel))
-        examples = [f for f in ctx.files if f.rsplit("/", 1)[-1] in ENV_EXAMPLE_NAMES and "/" not in f]
+        root_examples = [f for f in ctx.files if f in ENV_EXAMPLE_NAMES]
+        all_examples = [f for f in ctx.files if f.rsplit("/", 1)[-1] in ENV_EXAMPLE_NAMES]
+        examples = root_examples or all_examples
         example_vars = set(parse_env_keys(ctx.read_text(examples[0]) or "")) if examples else set()
         known_vars = code_vars | example_vars | PLATFORM_VARS
         if not code_vars and not example_vars:
