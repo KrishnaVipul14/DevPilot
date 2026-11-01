@@ -125,6 +125,30 @@ class _ModuleIndex:
         return ".".join([*base, module] if module else base)
 
 
+def _extract_call_path(call: ast.Call) -> str | None:
+    if call.args:
+        first = call.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+    for kw in call.keywords:
+        if (
+            kw.arg in ("path", "rule", "url")
+            and isinstance(kw.value, ast.Constant)
+            and isinstance(kw.value.value, str)
+        ):
+            return kw.value.value
+    return None
+
+
+def _extract_call_methods(call: ast.Call, default_m: str) -> list[str]:
+    for kw in call.keywords:
+        if kw.arg in ("methods", "method") and isinstance(kw.value, (ast.List, ast.Tuple, ast.Set)):
+            res = [str(e.value).upper() for e in kw.value.elts if isinstance(e, ast.Constant)]
+            if res:
+                return res
+    return [default_m.upper()]
+
+
 class RepoGraph:
     def __init__(self) -> None:
         self.nodes: dict[str, Node] = {}
@@ -161,7 +185,9 @@ class RepoGraph:
         method_index = graph._method_name_index()
         for idx in indexes.values():
             _CallVisitor(graph, idx, indexes, method_index).visit(idx.tree)
+            graph._collect_django_routes(idx)
         graph._process_jvm_files(ctx)
+        graph._process_js_ts_files(ctx)
         graph._dedupe_edges()
         return graph
 
@@ -270,6 +296,121 @@ class RepoGraph:
                 )
                 self.edges.append(Edge(parent_id, fid, "defines"))
 
+            self._scan_jvm_routes(rel, mod, text, last_cid)
+
+    def _scan_jvm_routes(self, rel: str, mod: str, text: str, last_cid: str | None) -> None:
+        retrofit_re = re.compile(
+            r"""@(GET|POST|PUT|DELETE|PATCH|HEAD)\s*\(\s*['"]([^'"]+)['"]\s*\)""",
+            re.MULTILINE,
+        )
+        spring_re = re.compile(
+            r"""@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\(\s*(?:(?:value|path)\s*=\s*)?['"]([^'"]+)['"])?""",
+            re.MULTILINE,
+        )
+        for rm in retrofit_re.finditer(text):
+            r_method = rm.group(1).upper()
+            r_path = "/" + rm.group(2).lstrip("/")
+            r_id = f"route:{r_method} {r_path}"
+            r_line = text[: rm.start()].count("\n") + 1
+            self._add(
+                Node(
+                    id=r_id,
+                    kind="route",
+                    name=f"{r_method} {r_path}",
+                    file=rel,
+                    line=r_line,
+                    module=mod,
+                    meta={"method": r_method, "path": r_path, "framework": "retrofit"},
+                )
+            )
+            if last_cid:
+                self.edges.append(Edge(r_id, last_cid, "routes_to"))
+
+        for sm in spring_re.finditer(text):
+            m_type = sm.group(1)
+            s_method = "ALL" if m_type == "RequestMapping" else m_type.replace("Mapping", "").upper()
+            s_path = "/" + (sm.group(2) or "").lstrip("/")
+            s_id = f"route:{s_method} {s_path}"
+            s_line = text[: sm.start()].count("\n") + 1
+            self._add(
+                Node(
+                    id=s_id,
+                    kind="route",
+                    name=f"{s_method} {s_path}",
+                    file=rel,
+                    line=s_line,
+                    module=mod,
+                    meta={"method": s_method, "path": s_path, "framework": "spring"},
+                )
+            )
+            if last_cid:
+                self.edges.append(Edge(s_id, last_cid, "routes_to"))
+
+    def _process_js_ts_files(self, ctx: RepoContext) -> None:
+        express_re = re.compile(
+            r"""\b(?:app|router|server)\.(get|post|put|delete|patch|options|head|all)\s*\(\s*['"]([^'"]+)['"]""",
+            re.MULTILINE,
+        )
+        for rel in ctx.js_ts_files:
+            text = ctx.read_text(rel)
+            if not text:
+                continue
+            clean_rel = rel.replace("\\", "/")
+            mod = clean_rel.rsplit(".", 1)[0]
+            m_app = re.search(r"(?:^|/)app/(.+)/route\.[jt]sx?$", clean_rel)
+            if m_app:
+                sub_path = m_app.group(1)
+                route_path = "/" + re.sub(r"\[([^\]]+)\]", r":\1", sub_path)
+                for http_m in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
+                    if re.search(rf"\bexport\s+(?:async\s+)?function\s+{http_m}\b", text):
+                        rid = f"route:{http_m} {route_path}"
+                        self._add(
+                            Node(
+                                id=rid,
+                                kind="route",
+                                name=f"{http_m} {route_path}",
+                                file=clean_rel,
+                                line=1,
+                                module=mod,
+                                meta={"method": http_m, "path": route_path, "framework": "nextjs"},
+                            )
+                        )
+            elif "/pages/api/" in clean_rel:
+                sub_path = clean_rel.split("/pages/api/", 1)[-1].rsplit(".", 1)[0]
+                if sub_path.endswith("/index"):
+                    sub_path = sub_path.removesuffix("/index")
+                route_path = "/api/" + re.sub(r"\[([^\]]+)\]", r":\1", sub_path)
+                rid = f"route:ALL {route_path}"
+                self._add(
+                    Node(
+                        id=rid,
+                        kind="route",
+                        name=f"ALL {route_path}",
+                        file=clean_rel,
+                        line=1,
+                        module=mod,
+                        meta={"method": "ALL", "path": route_path, "framework": "nextjs"},
+                    )
+                )
+
+            for m in express_re.finditer(text):
+                method = m.group(1).upper()
+                raw_p = m.group(2)
+                norm_p = "/" + raw_p.lstrip("/") if raw_p else "/"
+                rid = f"route:{method} {norm_p}"
+                line_no = text[: m.start()].count("\n") + 1
+                self._add(
+                    Node(
+                        id=rid,
+                        kind="route",
+                        name=f"{method} {norm_p}",
+                        file=clean_rel,
+                        line=line_no,
+                        module=mod,
+                        meta={"method": method, "path": norm_p, "framework": "express"},
+                    )
+                )
+
     def _collect_defs(
         self,
         idx: _ModuleIndex,
@@ -329,34 +470,87 @@ class RepoGraph:
         self, idx: _ModuleIndex, fn: ast.FunctionDef | ast.AsyncFunctionDef, fn_id: str
     ) -> None:
         for dec in fn.decorator_list:
-            if not (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)):
+            if not isinstance(dec, ast.Call):
                 continue
-            attr = dec.func.attr.lower()
-            if attr not in ROUTE_METHODS or not dec.args:
+            attr = ""
+            if isinstance(dec.func, ast.Attribute):
+                attr = dec.func.attr.lower()
+            elif isinstance(dec.func, ast.Name):
+                attr = dec.func.id.lower()
+
+            if attr not in ROUTE_METHODS and attr not in ("api_view", "action"):
                 continue
-            path = dec.args[0]
-            if not (
-                isinstance(path, ast.Constant) and isinstance(path.value, str) and path.value.startswith("/")
-            ):
-                continue
-            methods = [attr.upper()] if attr not in ("route", "api_route") else ["GET"]
-            for kw in dec.keywords:
-                if kw.arg == "methods" and isinstance(kw.value, (ast.List, ast.Tuple)):
-                    methods = [str(e.value).upper() for e in kw.value.elts if isinstance(e, ast.Constant)]
+
+            raw_path = _extract_call_path(dec)
+            if raw_path is None:
+                if attr == "api_view":
+                    raw_path = f"/{fn.name.replace('_', '-')}"
+                elif not dec.args and not dec.keywords:
+                    raw_path = "/"
+                else:
+                    continue
+
+            norm_path = "/" + raw_path.lstrip("/") if raw_path else "/"
+            default_m = "GET" if attr in ("route", "api_route", "api_view", "action") else attr.upper()
+            if attr == "api_view" and dec.args and isinstance(dec.args[0], (ast.List, ast.Tuple, ast.Set)):
+                methods = [str(e.value).upper() for e in dec.args[0].elts if isinstance(e, ast.Constant)]
+            else:
+                methods = _extract_call_methods(dec, default_m)
+
             for method in methods:
-                rid = f"route:{method} {path.value}"
+                rid = f"route:{method} {norm_path}"
                 self._add(
                     Node(
                         id=rid,
                         kind="route",
-                        name=f"{method} {path.value}",
+                        name=f"{method} {norm_path}",
                         file=idx.rel,
                         line=dec.lineno,
                         module=idx.mod,
-                        meta={"method": method, "path": path.value, "handler": fn_id},
+                        meta={"method": method, "path": norm_path, "handler": fn_id},
                     )
                 )
                 self.edges.append(Edge(rid, fn_id, "routes_to"))
+
+    def _collect_django_routes(self, idx: _ModuleIndex) -> None:
+        for node in ast.walk(idx.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fname = ""
+            if isinstance(node.func, ast.Name):
+                fname = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                fname = node.func.attr
+            if fname in ("path", "re_path") and len(node.args) >= 2:
+                arg0 = node.args[0]
+                if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                    raw_p = arg0.value.strip("^$ ")
+                    norm_p = "/" + raw_p.strip("/")
+                    handler_name = ""
+                    arg1 = node.args[1]
+                    if isinstance(arg1, ast.Name):
+                        handler_name = arg1.id
+                    elif isinstance(arg1, ast.Attribute):
+                        handler_name = arg1.attr
+                    elif isinstance(arg1, ast.Call) and isinstance(arg1.func, ast.Attribute):
+                        if isinstance(arg1.func.value, ast.Name):
+                            handler_name = arg1.func.value.id
+
+                    rid = f"route:ALL {norm_p}"
+                    self._add(
+                        Node(
+                            id=rid,
+                            kind="route",
+                            name=f"ALL {norm_p}",
+                            file=idx.rel,
+                            line=node.lineno,
+                            module=idx.mod,
+                            meta={"method": "ALL", "path": norm_p, "handler": handler_name},
+                        )
+                    )
+                    if handler_name:
+                        target_id = idx.defs.get(handler_name) or f"{idx.mod}:{handler_name}"
+                        self.edges.append(Edge(rid, target_id, "routes_to"))
 
     def _collect_imports(self, idx: _ModuleIndex, indexes: dict[str, _ModuleIndex]) -> None:
         pkg = idx.package()

@@ -32,7 +32,9 @@ class PatchError(Exception):
 
 
 def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # Normalize newlines so hashes match regardless of CRLF vs LF line endings
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def unified_diff_text(rel_path: str, old_text: str, new_text: str) -> str:

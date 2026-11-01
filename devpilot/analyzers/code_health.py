@@ -31,10 +31,21 @@ RULE_SEVERITY: dict[str, Severity] = {
     "F702": Severity.HIGH,
     "F704": Severity.HIGH,
     "F706": Severity.HIGH,
-    "S102": Severity.HIGH,
-    "S307": Severity.HIGH,
-    "S602": Severity.HIGH,
-    "S506": Severity.HIGH,
+    "E999": Severity.CRITICAL,  # syntax error
+    "E902": Severity.CRITICAL,  # token/IO error
+    "S608": Severity.CRITICAL,  # SQL injection via string concatenation
+    "S301": Severity.CRITICAL,  # unsafe deserialization with pickle
+    "S102": Severity.CRITICAL,  # use of exec()
+    "S307": Severity.CRITICAL,  # use of eval()
+    "S602": Severity.CRITICAL,  # subprocess call with shell=True
+    "S506": Severity.CRITICAL,  # unsafe yaml.load()
+    "S105": Severity.CRITICAL,  # hardcoded password string
+    "S106": Severity.CRITICAL,  # hardcoded password in func call
+    "S107": Severity.CRITICAL,  # hardcoded password in func default
+    "S324": Severity.HIGH,  # insecure MD5/SHA-1 hash
+    "S104": Severity.HIGH,  # binding to 0.0.0.0
+    "S201": Severity.HIGH,  # debug mode enabled
+    "S701": Severity.HIGH,  # autoescape disabled
     "B006": Severity.MEDIUM,
     "B008": Severity.MEDIUM,
     "B904": Severity.LOW,
@@ -57,10 +68,19 @@ RULE_TITLES: dict[str, str] = {
     "F841": "Unused local variable",
     "C901": "Function is too complex",
     "E722": "Bare except clause",
-    "S307": "Use of eval()",
-    "S102": "Use of exec()",
-    "S602": "subprocess call with shell=True",
-    "S506": "Unsafe yaml.load()",
+    "E999": "Syntax error",
+    "S608": "Possible SQL injection vector",
+    "S301": "Insecure deserialization (pickle)",
+    "S307": "Use of eval() (code execution)",
+    "S102": "Use of exec() (code execution)",
+    "S602": "subprocess call with shell=True (command injection)",
+    "S506": "Unsafe yaml.load() (code execution)",
+    "S105": "Possible hardcoded password",
+    "S106": "Hardcoded password argument",
+    "S107": "Hardcoded password in default argument",
+    "S324": "Insecure hash algorithm (MD5/SHA-1)",
+    "S104": "Socket binding to all network interfaces (0.0.0.0)",
+    "S201": "Flask debug mode enabled",
     "B006": "Mutable default argument",
 }
 
@@ -70,10 +90,19 @@ RULE_SUGGESTIONS: dict[str, str] = {
     "F841": "Remove the unused variable or use it.",
     "C901": "Split the function into smaller, well-named helpers.",
     "E722": "Catch specific exceptions (e.g. `except ValueError:`) so real errors are not swallowed.",
-    "S307": "Avoid eval(); use ast.literal_eval() or explicit parsing.",
+    "E999": "Fix the syntax error to ensure valid Python syntax.",
+    "S608": "Use parameterized queries or ORM query builders to prevent SQL injection.",
+    "S301": "Avoid pickle for untrusted input; use JSON or safe serialization formats.",
+    "S307": "Avoid eval(); use ast.literal_eval() or explicit parsing to avoid code execution.",
     "S102": "Avoid exec(); restructure the code to call functions directly.",
-    "S602": "Pass an argument list and shell=False to avoid shell injection.",
+    "S602": "Pass an argument list and shell=False to avoid command injection vulnerabilities.",
     "S506": "Use yaml.safe_load() instead of yaml.load().",
+    "S105": "Never hardcode passwords; load credentials from environment variables or a secrets manager.",
+    "S106": "Pass sensitive credentials via configuration or environment variables.",
+    "S107": "Do not specify credentials as default arguments; require them at runtime from secure sources.",
+    "S324": "Use secure hash algorithms such as SHA-256 or SHA-512.",
+    "S104": "Bind to localhost (127.0.0.1) or a specific network interface rather than 0.0.0.0.",
+    "S201": "Ensure debug=False in production deployments.",
     "B006": "Use None as the default and create the mutable object inside the function.",
 }
 

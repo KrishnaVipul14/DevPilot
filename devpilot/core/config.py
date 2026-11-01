@@ -44,6 +44,15 @@ DEFAULT_RUFF_SELECT = [
     "S307",  # use of eval
     "S602",  # subprocess with shell=True
     "S506",  # unsafe yaml.load
+    "S608",  # SQL injection via string concatenation
+    "S301",  # unsafe deserialization with pickle
+    "S105",  # hardcoded password string
+    "S106",  # hardcoded password in func call
+    "S107",  # hardcoded password in func default
+    "S324",  # insecure hash function (MD5/SHA1)
+    "S104",  # binding to 0.0.0.0
+    "S201",  # Flask debug=True
+    "S701",  # Jinja2 autoescape disabled
     "E722",  # bare except
 ]
 

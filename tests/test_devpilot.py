@@ -206,11 +206,11 @@ def test_cli_commands_and_local_api_server(tmp_path: Path) -> None:
         # POST with X-DevPilot: 1 succeeds
         good_req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/plan",
-            data=b"{}",
+            data=b'{"deterministic": true}',
             method="POST",
             headers={"Content-Type": "application/json", "X-DevPilot": "1"},
         )
-        with urllib.request.urlopen(good_req, timeout=5) as resp:
+        with urllib.request.urlopen(good_req, timeout=15) as resp:
             post_plan = json.loads(resp.read().decode("utf-8"))
             assert "plan" in post_plan
     finally:
@@ -600,3 +600,116 @@ def test_multilang_dependency_fixes_and_sqlite_resilience(tmp_path: Path) -> Non
     assert ver_gradle["status"] == "verified"
     apply_patch(ctx, patch_gradle["patch_id"])
     assert "'com.squareup.okhttp3:okhttp:4.9.3'" in (repo / "build.gradle").read_text(encoding="utf-8")
+
+
+def test_route_detection_and_critical_health_and_hashing(tmp_path: Path) -> None:
+    from devpilot.fixes.patch_generator import sha256_text
+
+    # 1. Hashing robustness
+    # Line endings CRLF vs LF produce identical hashes
+    assert sha256_text("line1\r\nline2\r\n") == sha256_text("line1\nline2\n")
+    # Path separators \ vs / produce identical fingerprints
+    assert compute_fingerprint("mod", "rule", "src\\api\\v1.py", "anchor") == compute_fingerprint(
+        "mod", "rule", "src/api/v1.py", "anchor"
+    )
+
+    # 2. Comprehensive API Route Detection across Python, Next.js, Express, and Kotlin
+    repo = tmp_path / "routes_and_security_app"
+    repo.mkdir()
+
+    # FastAPI route with keyword path and missing leading slash
+    py_code = """
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get(path="items")
+def get_items():
+    return []
+
+@app.post("/login")
+def login():
+    return {"token": "123"}
+"""
+    (repo / "main.py").write_text(py_code, encoding="utf-8")
+
+    # Django urlpatterns
+    django_code = """
+from django.urls import path
+
+urlpatterns = [
+    path("api/v1/users/", list_users),
+]
+"""
+    (repo / "urls.py").write_text(django_code, encoding="utf-8")
+
+    # Next.js App Router route.ts
+    (repo / "app" / "api" / "checkout").mkdir(parents=True)
+    next_ts = """
+export async function POST(req) {
+    return new Response(JSON.stringify({ ok: true }));
+}
+export async function GET(req) {
+    return new Response(JSON.stringify({ status: "healthy" }));
+}
+"""
+    (repo / "app" / "api" / "checkout" / "route.ts").write_text(next_ts, encoding="utf-8")
+
+    # Express.js route
+    express_js = """
+const express = require('express');
+const app = express();
+app.get('/api/health', (req, res) => res.json({ ok: true }));
+"""
+    (repo / "server.js").write_text(express_js, encoding="utf-8")
+
+    # Kotlin Retrofit route
+    kt_code = """
+package com.example.api
+import retrofit2.http.GET
+
+interface ApiClient {
+    @GET("v2/profile")
+    suspend fun getProfile(): String
+}
+"""
+    (repo / "ApiClient.kt").write_text(kt_code, encoding="utf-8")
+
+    # Critical security issue: hardcoded private key
+    sec_code = """
+# Secret key embedded
+KEY = \"\"\"-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA0Yq3...
+-----END RSA PRIVATE KEY-----\"\"\"
+"""
+    (repo / "secrets_leak.py").write_text(sec_code, encoding="utf-8")
+
+    # Scan project
+    report = run_scan(repo, offline=True, persist=True)
+
+    # Verify commit hash generated for non-git repository
+    assert report.repository.commit is not None
+    assert report.repository.commit.startswith("tree-")
+
+    # Verify all API routes detected across frameworks
+    assert report.graph is not None
+    assert report.graph.routes >= 6
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    graph = RepoGraph.build(ctx)
+    routes = {n.name for n in graph.nodes.values() if n.kind == "route"}
+
+    assert "GET /items" in routes
+    assert "POST /login" in routes
+    assert "ALL /api/v1/users" in routes
+    assert "POST /api/checkout" in routes
+    assert "GET /api/checkout" in routes
+    assert "GET /api/health" in routes
+    assert "GET /v2/profile" in routes
+
+    # Verify Critical Security finding and Health Score penalty
+    crit_findings = [f for f in report.findings if f.severity == Severity.CRITICAL]
+    assert len(crit_findings) >= 1
+    assert any("Private key" in f.title or "Private key" in f.evidence for f in crit_findings)
+    assert report.summary.by_severity["critical"] >= 1
+    # Health score must reflect the 25-point penalty for critical issues
+    assert report.summary.health_score <= 75

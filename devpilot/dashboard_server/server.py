@@ -124,7 +124,7 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
 
         try:
             if path.rstrip("/") == "/api/plan":
-                self._send_json(200, self.api.post_plan())
+                self._send_json(200, self.api.post_plan(body))
                 return
             if path.rstrip("/") == "/api/settings":
                 self._send_json(200, self.api.post_settings(body))

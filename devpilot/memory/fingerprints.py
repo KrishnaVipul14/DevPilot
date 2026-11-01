@@ -23,14 +23,23 @@ def normalize_code(text: str) -> str:
 
 
 def compute_fingerprint(module: str, rule: str, file: str | None, anchor: str) -> str:
-    raw = "\x1f".join([module, rule, file or "", normalize_code(anchor)])
+    file_clean = (file or "").replace("\\", "/")
+    raw = "\x1f".join([module, rule, file_clean, normalize_code(anchor)])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
 def assign_fingerprints(findings: list[Finding], anchors: list[str]) -> None:
-    """Assign fingerprints in-place; duplicates get an occurrence suffix."""
+    """Assign stable fingerprints in-place; duplicates get an occurrence suffix."""
     seen: Counter[str] = Counter()
-    for finding, anchor in zip(findings, anchors, strict=False):
+    for idx, finding in enumerate(findings):
+        anchor = ""
+        if idx < len(anchors) and anchors[idx]:
+            anchor = anchors[idx]
+        if not anchor.strip():
+            meta = finding.metadata or {}
+            key_val = meta.get("package") or meta.get("variable") or meta.get("url") or meta.get("name")
+            anchor = str(key_val) if key_val else (finding.evidence or finding.title or finding.rule)
+
         base = compute_fingerprint(finding.module, finding.rule, finding.file, anchor)
         seen[base] += 1
         finding.fingerprint = base if seen[base] == 1 else f"{base}-{seen[base]}"
