@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
-from devpilot.analyzers.manifests import parse_pyproject, parse_requirements
+from devpilot.analyzers.manifests import discover_dependencies, parse_pyproject, parse_requirements
 from devpilot.analyzers.osv import cvss3_base_score, score_to_label
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.cli.main import app
@@ -848,3 +848,193 @@ export async function fetchConfig() {
     missing_env_findings = [f for f in setup_findings if f.rule == "env-missing-from-example"]
     missing_vars = {f.metadata.get("variable") for f in missing_env_findings}
     assert "REACT_APP_STRIPE_KEY" in missing_vars
+
+
+def test_rust_and_go_dependency_parsing_and_autofixes(tmp_path: Path) -> None:
+    repo = tmp_path / "polyglot_systems_repo"
+    repo.mkdir()
+
+    cargo_text = """[package]
+name = "sample-crate"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0.104"
+tokio = { version = "1.20.0", features = ["full"] }
+"""
+    (repo / "Cargo.toml").write_text(cargo_text, encoding="utf-8")
+
+    go_mod_text = """module example.com/my-go-service
+
+go 1.21
+
+require (
+\tgithub.com/gin-gonic/gin v1.7.0
+\tgithub.com/stretchr/testify v1.8.0
+)
+"""
+    (repo / "go.mod").write_text(go_mod_text, encoding="utf-8")
+
+    pyproject_text = """[project]
+name = "my-service"
+version = "0.1.0"
+dependencies = [
+    "requests==2.25.0",
+]
+"""
+    (repo / "pyproject.toml").write_text(pyproject_text, encoding="utf-8")
+
+    ctx = RepoContext(root=repo, config=load_config(repo), offline=True)
+    deps = discover_dependencies(ctx)
+
+    by_eco = {}
+    for d in deps:
+        by_eco.setdefault(d.ecosystem, []).append(d)
+
+    assert "crates.io" in by_eco
+    assert any(d.name == "serde" and d.version == "1.0.104" for d in by_eco["crates.io"])
+    assert any(d.name == "tokio" and d.version == "1.20.0" for d in by_eco["crates.io"])
+
+    assert "Go" in by_eco
+    assert any(d.name == "github.com/gin-gonic/gin" and d.version == "1.7.0" for d in by_eco["Go"])
+
+    assert "PyPI" in by_eco
+    assert any(d.name == "requests" and d.version == "2.25.0" for d in by_eco["PyPI"])
+
+    # 1. Propose & apply Cargo.toml bump
+    cargo_finding = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="tokio vulnerable",
+        file="Cargo.toml",
+        line=6,
+        evidence="tokio 1.20.0 vulnerable",
+        confidence=Confidence.HIGH,
+        metadata={"package": "tokio", "installed_version": "1.20.0", "fixed_versions": ["1.28.0"]},
+    )
+    p_cargo = propose_patch(ctx, cargo_finding, engine="auto")
+    assert 'version = "1.28.0"' in p_cargo["diff"]
+    verify_patch(ctx, p_cargo["patch_id"])
+    apply_patch(ctx, p_cargo["patch_id"])
+    assert 'version = "1.28.0"' in (repo / "Cargo.toml").read_text(encoding="utf-8")
+
+    # 2. Propose & apply go.mod bump
+    go_finding = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="gin vulnerable",
+        file="go.mod",
+        line=6,
+        evidence="gin v1.7.0 vulnerable",
+        confidence=Confidence.HIGH,
+        metadata={
+            "package": "github.com/gin-gonic/gin",
+            "installed_version": "1.7.0",
+            "fixed_versions": ["1.9.1"],
+        },
+    )
+    p_go = propose_patch(ctx, go_finding, engine="auto")
+    assert "github.com/gin-gonic/gin v1.9.1" in p_go["diff"]
+    verify_patch(ctx, p_go["patch_id"])
+    apply_patch(ctx, p_go["patch_id"])
+    assert "github.com/gin-gonic/gin v1.9.1" in (repo / "go.mod").read_text(encoding="utf-8")
+
+    # 3. Propose & apply pyproject.toml bump
+    py_finding = Finding(
+        module="dependencies",
+        rule="vulnerable-dependency",
+        severity=Severity.HIGH,
+        title="requests vulnerable",
+        file="pyproject.toml",
+        line=5,
+        evidence="requests==2.25.0 vulnerable",
+        confidence=Confidence.HIGH,
+        metadata={"package": "requests", "installed_version": "2.25.0", "fixed_versions": ["2.31.0"]},
+    )
+    p_py = propose_patch(ctx, py_finding, engine="auto")
+    assert '"requests==2.31.0"' in p_py["diff"]
+    verify_patch(ctx, p_py["patch_id"])
+    apply_patch(ctx, p_py["patch_id"])
+    assert '"requests==2.31.0"' in (repo / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_js_ts_code_health_security_and_multi_language_impact(tmp_path: Path) -> None:
+    repo = tmp_path / "react_sec_repo"
+    repo.mkdir()
+
+    # Create README with documented env var
+    readme_md = """# My React Application
+
+Setup instructions:
+```bash
+export REACT_APP_BACKEND_URL=https://api.myapp.com
+```
+"""
+    (repo / "README.md").write_text(readme_md, encoding="utf-8")
+
+    # src/components/DangerousComponent.jsx
+    src = repo / "src"
+    src.mkdir()
+    comp = src / "components"
+    comp.mkdir()
+
+    js_code = """
+import React from 'react';
+
+export function DangerousViewer({ rawContent }) {
+    // 1. eval injection
+    eval("console.log(rawContent)");
+
+    // 2. new Function injection
+    const dynamicFn = new Function("x", "return x * 2;");
+
+    // 3. Document write
+    document.write("<span>Rendering</span>");
+
+    // 4. Debugger statement
+    debugger;
+
+    const apiUrl = process.env.REACT_APP_BACKEND_URL;
+
+    // 5. dangerouslySetInnerHTML
+    return (
+        <div dangerouslySetInnerHTML={{ __html: rawContent }}>
+            <p>API: {apiUrl}</p>
+        </div>
+    );
+}
+
+export function configureAgent() {
+    return {
+        // 6. Insecure TLS
+        rejectUnauthorized: false
+    };
+}
+"""
+    (comp / "DangerousComponent.jsx").write_text(js_code, encoding="utf-8")
+
+    # Run scan
+    report = run_scan(repo, offline=True, persist=True)
+
+    rules_found = {f.rule for f in report.findings if f.module == "code_health"}
+    assert "js-eval-code-execution" in rules_found
+    assert "js-function-constructor-injection" in rules_found
+    assert "js-insecure-tls" in rules_found
+    assert "react-dangerously-set-inner-html" in rules_found
+    assert "js-document-write" in rules_found
+    assert "js-debugger-statement" in rules_found
+
+    # Check documentation analyzer correctly identified REACT_APP_BACKEND_URL in JS/TS
+    doc_findings = [f for f in report.findings if f.module == "documentation"]
+    assert not any(f.rule == "doc-env-not-in-code" for f in doc_findings)
+
+    # Test multi-language change impact test command suggestions
+    test_files = {"src/__tests__/DangerousComponent.test.jsx", "tests/test_api.py"}
+    changed_files = [{"path": "src/components/DangerousComponent.jsx"}]
+    from devpilot.analyzers.change_impact import _suggest_test_commands
+
+    cmds = _suggest_test_commands(test_files, changed_files)
+    assert any("npm test --" in c for c in cmds)
+    assert any("pytest" in c for c in cmds)

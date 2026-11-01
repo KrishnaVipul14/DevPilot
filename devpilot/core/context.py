@@ -119,6 +119,14 @@ class RepoContext:
         return [f for f in self.files if f.endswith((".kt", ".kts", ".java"))]
 
     @cached_property
+    def rust_files(self) -> list[str]:
+        return [f for f in self.files if f.endswith(".rs")]
+
+    @cached_property
+    def go_files(self) -> list[str]:
+        return [f for f in self.files if f.endswith(".go")]
+
+    @cached_property
     def gradle_files(self) -> list[str]:
         return [
             f

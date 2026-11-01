@@ -62,7 +62,24 @@ class Edge:
 
 
 def module_name(rel: str) -> str:
-    path = rel.replace("\\", "/").removesuffix(".py")
+    path = rel.replace("\\", "/")
+    for ext in (
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".kt",
+        ".kts",
+        ".java",
+        ".rs",
+        ".go",
+    ):
+        if path.endswith(ext):
+            path = path[: -len(ext)]
+            break
     path = path.removeprefix("src/")
     parts = path.split("/")
     if parts[-1] == "__init__":

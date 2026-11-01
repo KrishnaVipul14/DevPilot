@@ -182,7 +182,15 @@ class DependencyAnalyzer(Analyzer):
                     fixes
                     and any(
                         m in dep.manifest.lower()
-                        for m in ("requirements", "package.json", ".gradle", "pom.xml")
+                        for m in (
+                            "requirements",
+                            "package.json",
+                            ".gradle",
+                            "pom.xml",
+                            "cargo.toml",
+                            "go.mod",
+                            "pyproject.toml",
+                        )
                     )
                 ),
                 references=[f"https://osv.dev/vulnerability/{primary}"],

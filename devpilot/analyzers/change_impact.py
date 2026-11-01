@@ -241,9 +241,23 @@ def _map_changed_files_and_symbols(
 ) -> tuple[list[dict[str, Any]], dict[str, Node]]:
     changed_files: list[dict[str, Any]] = []
     changed_symbols_map: dict[str, Node] = {}
+    src_exts = (
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".kt",
+        ".kts",
+        ".java",
+        ".rs",
+        ".go",
+    )
 
     for rel, lines in sorted(changed_lines.items()):
-        if not rel.endswith(".py"):
+        if not rel.lower().endswith(src_exts):
             changed_files.append({"path": rel, "status": "modified", "changed_symbols": []})
             continue
         file_syms: list[str] = []
@@ -255,14 +269,47 @@ def _map_changed_files_and_symbols(
             elif sym and sym.id not in file_syms:
                 file_syms.append(sym.id)
         if not file_syms:
-            mod = module_name(rel)
-            for edge in graph.outgoing(mod, ("defines",)):
-                node = graph.nodes.get(edge.target)
-                if node and node.kind in ("function", "class"):
-                    changed_symbols_map.setdefault(node.id, node)
-                    file_syms.append(node.id)
+            clean_rel = rel.replace("\\", "/")
+            candidates = {
+                module_name(rel),
+                clean_rel.rsplit(".", 1)[0],
+                clean_rel,
+            }
+            for mod in candidates:
+                for edge in graph.outgoing(mod, ("defines",)):
+                    node = graph.nodes.get(edge.target)
+                    if node and node.kind in ("function", "class", "test"):
+                        changed_symbols_map.setdefault(node.id, node)
+                        if node.id not in file_syms:
+                            file_syms.append(node.id)
         changed_files.append({"path": rel, "status": "modified", "changed_symbols": file_syms})
     return changed_files, changed_symbols_map
+
+
+def _suggest_test_commands(all_test_files: set[str], changed_files: list[dict[str, Any]]) -> list[str]:
+    suggested_commands: list[str] = []
+    py_tests = [f for f in all_test_files if f.endswith(".py")]
+    js_tests = [f for f in all_test_files if f.endswith((".js", ".jsx", ".ts", ".tsx"))]
+    jvm_tests = [f for f in all_test_files if f.endswith((".kt", ".java"))]
+
+    if py_tests:
+        suggested_commands.append(f"pytest {' '.join(sorted(py_tests))}")
+    if js_tests:
+        suggested_commands.append(f"npm test -- {' '.join(sorted(js_tests))}")
+    if jvm_tests:
+        suggested_commands.append("./gradlew test")
+
+    if not suggested_commands and changed_files:
+        has_py = any(f["path"].endswith(".py") for f in changed_files)
+        has_js = any(f["path"].endswith((".js", ".jsx", ".ts", ".tsx")) for f in changed_files)
+        has_jvm = any(f["path"].endswith((".kt", ".java")) for f in changed_files)
+        if has_py:
+            suggested_commands.append("pytest")
+        if has_js:
+            suggested_commands.append("npm test")
+        if has_jvm:
+            suggested_commands.append("./gradlew test")
+    return suggested_commands
 
 
 def analyze_git_impact(
@@ -311,11 +358,7 @@ def analyze_git_impact(
     elif not overall_reasons:
         overall_reasons.append(f"{len(changed_files)} file(s) modified with low static blast radius.")
 
-    suggested_commands: list[str] = []
-    if all_test_files:
-        suggested_commands.append(f"pytest {' '.join(sorted(all_test_files))}")
-    elif changed_files:
-        suggested_commands.append("pytest")
+    suggested_commands = _suggest_test_commands(all_test_files, changed_files)
 
     return {
         "base": effective_base,
