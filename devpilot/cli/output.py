@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -340,3 +341,32 @@ def print_patch(patch: dict[str, Any]) -> None:
                 (c.get("detail") or "").splitlines()[0][:100] if c.get("detail") else "",
             )
         console.print(vtab)
+
+
+def print_ask_answer(res: dict[str, Any]) -> None:
+    """Print the AI Architect answer in a formatted Rich panel."""
+    provider = res.get("provider", "offline")
+    model = res.get("model", "")
+    info = (
+        f"[bold cyan]DevPilot Repository Architect[/bold cyan] ({provider}{f' / {model}' if model else ''})"
+    )
+    console.print(Panel(Markdown(res.get("answer", "")), title=info, border_style="cyan"))
+    files = res.get("referenced_files")
+    if files:
+        console.print(f"[dim]Referenced assets: {', '.join(files)}[/dim]")
+
+
+def print_test_scaffold(scaffold: dict[str, Any]) -> None:
+    """Print a generated unit test scaffold with syntax highlighting."""
+    if not scaffold.get("success"):
+        console.print(f"[red]Error:[/red] {scaffold.get('error', 'Test generation failed')}")
+        return
+    info = (
+        f"[bold]Target Symbol:[/bold] {scaffold.get('symbol')} ({scaffold.get('target_file')})\n"
+        f"[bold]Suggested Test:[/bold] {scaffold.get('suggested_test_file')}\n"
+        f"[bold]Run Command:[/bold] [green]{scaffold.get('command')}[/green]"
+    )
+    console.print(Panel(info, title="[bold]Generated Unit Test Scaffold[/bold]", border_style="green"))
+    code = scaffold.get("test_code", "")
+    lang = scaffold.get("language", "python")
+    console.print(Syntax(code, lang, theme="monokai", line_numbers=True, word_wrap=True))

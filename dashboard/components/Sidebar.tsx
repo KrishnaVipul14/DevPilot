@@ -99,7 +99,14 @@ export function Sidebar() {
 
         <div className="mx-3 mb-3 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
           <div className="flex items-center justify-between">
-            <div className="text-[10px] uppercase tracking-wide text-zinc-500">Repository</div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-zinc-500">Repository</span>
+              {(status?.repository?.is_demo || status?.repository?.name?.toLowerCase().includes("demo")) && (
+                <span className="rounded bg-violet-500/20 px-1 py-0.2 text-[9px] font-bold text-violet-300 border border-violet-500/30">
+                  DEMO
+                </span>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => setRepoModalOpen(true)}

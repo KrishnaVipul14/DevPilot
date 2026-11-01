@@ -1038,3 +1038,78 @@ export function configureAgent() {
     cmds = _suggest_test_commands(test_files, changed_files)
     assert any("npm test --" in c for c in cmds)
     assert any("pytest" in c for c in cmds)
+
+
+def test_default_demo_project_and_cli_resolver() -> None:
+    from devpilot.cli.commands import _resolve_repo_path
+
+    # Test explicit demo flag
+    demo_path, is_demo = _resolve_repo_path(None, demo=True)
+    assert is_demo is True
+    assert demo_path.name == "demo-app"
+    assert (demo_path / "auth.py").exists()
+
+    # Test default path resolution inside DevPilot codebase
+    default_path, default_is_demo = _resolve_repo_path(None, demo=False)
+    assert default_is_demo is True
+    assert default_path.name == "demo-app"
+
+    # Test explicit custom path overrides demo default
+    custom_target = Path("/tmp")
+    custom_path, custom_is_demo = _resolve_repo_path(custom_target, demo=False)
+    assert custom_is_demo is False
+    assert custom_path == custom_target.resolve()
+
+
+def test_architect_ask_testgen_and_mermaid_api() -> None:
+    from devpilot.ai.architect import ask_codebase
+    from devpilot.analyzers.mermaid import export_mermaid
+    from devpilot.analyzers.repository_graph import RepoGraph
+    from devpilot.dashboard_server.api import LocalAPI
+    from devpilot.fixes.test_generator import generate_test_scaffold
+
+    demo_root = Path("examples/demo-app").resolve()
+    ctx = RepoContext(root=demo_root, config=load_config(demo_root))
+    graph = RepoGraph.build(ctx)
+
+    # 1. Test Mermaid export
+    mermaid_str = export_mermaid(graph)
+    assert "flowchart TD" in mermaid_str
+    assert "Routes" in mermaid_str or "Modules" in mermaid_str
+
+    # 2. Test Test Scaffold generator
+    scaffold = generate_test_scaffold(ctx, "validate_token", graph=graph)
+    assert scaffold["success"] is True
+    assert scaffold["language"] == "python"
+    assert scaffold["framework"] == "pytest"
+    assert "test_validate_token" in scaffold["test_code"]
+    assert "from auth import validate_token" in scaffold["test_code"]
+
+    # 3. Test Ask Codebase (offline fallback)
+    ask_res = ask_codebase(ctx, "How does authentication work?")
+    assert ask_res["question"] == "How does authentication work?"
+    assert len(ask_res["answer"]) > 10
+    assert "referenced_files" in ask_res
+
+    # 4. Test LocalAPI integration
+    api = LocalAPI(demo_root)
+    # Check demo status
+    status = api.get_status()
+    assert status["repository"]["is_demo"] is True
+    assert "Demo" in status["repository"]["name"]
+
+    # Check api.post_demo()
+    demo_res = api.post_demo()
+    assert demo_res["status"]["repository"]["is_demo"] is True
+
+    # Check api.get_mermaid()
+    m_res = api.get_mermaid()
+    assert "flowchart TD" in m_res["mermaid"]
+
+    # Check api.post_ask()
+    a_res = api.post_ask({"question": "List api endpoints"})
+    assert "question" in a_res
+
+    # Check api.post_testgen()
+    t_res = api.post_testgen({"symbol": "validate_token"})
+    assert t_res["success"] is True

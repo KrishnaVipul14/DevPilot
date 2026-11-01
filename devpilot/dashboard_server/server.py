@@ -97,6 +97,8 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
                     self._send_json(200, self.api.get_patches())
                 elif path.rstrip("/") == "/api/settings":
                     self._send_json(200, self.api.get_settings())
+                elif path.rstrip("/") == "/api/mermaid":
+                    self._send_json(200, self.api.get_mermaid())
                 else:
                     self._send_json(404, {"error": f"Unknown API endpoint {path}"})
             except APIHTTPError as exc:
@@ -106,6 +108,31 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._serve_static(path)
+
+    def _dispatch_post(self, path: str, body: dict[str, Any]) -> tuple[int, Any]:
+        norm = path.rstrip("/")
+        handlers = {
+            "/api/plan": lambda: self.api.post_plan(body),
+            "/api/settings": lambda: self.api.post_settings(body),
+            "/api/repository": lambda: self.api.post_repository(body),
+            "/api/demo": lambda: self.api.post_demo(),
+            "/api/scan": lambda: self.api.post_scan(body),
+            "/api/ask": lambda: self.api.post_ask(body),
+            "/api/testgen": lambda: self.api.post_testgen(body),
+        }
+        if norm in handlers:
+            return 200, handlers[norm]()
+
+        m = _EXPLAIN_RE.match(path)
+        if m:
+            return 200, self.api.post_explain(m.group(1))
+        m = _FIX_RE.match(path)
+        if m:
+            return 200, self.api.post_fix(m.group(1), body)
+        m = _PATCH_ACTION_RE.match(path)
+        if m:
+            return 200, self.api.post_patch_action(m.group(1), m.group(2))
+        return 404, {"error": f"Unknown POST endpoint {path}"}
 
     def do_POST(self) -> None:
         if not self._check_security(is_post=True):
@@ -123,31 +150,8 @@ class DevPilotRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            if path.rstrip("/") == "/api/plan":
-                self._send_json(200, self.api.post_plan(body))
-                return
-            if path.rstrip("/") == "/api/settings":
-                self._send_json(200, self.api.post_settings(body))
-                return
-            if path.rstrip("/") == "/api/repository":
-                self._send_json(200, self.api.post_repository(body))
-                return
-            if path.rstrip("/") == "/api/scan":
-                self._send_json(200, self.api.post_scan(body))
-                return
-            m = _EXPLAIN_RE.match(path)
-            if m:
-                self._send_json(200, self.api.post_explain(m.group(1)))
-                return
-            m = _FIX_RE.match(path)
-            if m:
-                self._send_json(200, self.api.post_fix(m.group(1), body))
-                return
-            m = _PATCH_ACTION_RE.match(path)
-            if m:
-                self._send_json(200, self.api.post_patch_action(m.group(1), m.group(2)))
-                return
-            self._send_json(404, {"error": f"Unknown POST endpoint {path}"})
+            code, res = self._dispatch_post(path, body)
+            self._send_json(code, res)
         except APIHTTPError as exc:
             self._send_json(exc.status_code, {"error": exc.message})
         except Exception as exc:  # noqa: BLE001

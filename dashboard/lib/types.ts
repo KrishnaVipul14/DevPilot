@@ -49,6 +49,7 @@ export interface RepositoryInfo {
   commit: string | null;
   branch: string | null;
   dirty: boolean | null;
+  is_demo?: boolean;
 }
 
 export interface Summary {
@@ -115,7 +116,7 @@ export interface StatusResponse {
   scan_id: string | null;
   finished_at: string | null;
   report_mtime: number | string | null;
-  repository: { name: string; path: string };
+  repository: { name: string; path: string; is_demo?: boolean };
   ai: {
     available: boolean;
     provider: string | null;

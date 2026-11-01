@@ -8,11 +8,13 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from devpilot.ai.architect import ask_codebase
 from devpilot.ai.gemini import _read_dotenv_vars as _read_gemini_dotenv
 from devpilot.ai.groq import _read_dotenv_vars as _read_groq_dotenv
 from devpilot.ai.provider import AIProviderError, get_ai_provider
 from devpilot.ai.suggestions import explain_finding, generate_plan
 from devpilot.analyzers.change_impact import analyze_git_impact, analyze_symbol_impact
+from devpilot.analyzers.mermaid import export_mermaid
 from devpilot.analyzers.repository_graph import RepoGraph
 from devpilot.core.config import load_config
 from devpilot.core.context import RepoContext
@@ -25,6 +27,7 @@ from devpilot.core.report import (
 from devpilot.core.scanner import run_scan
 from devpilot.fixes.patch_generator import PatchError, propose_patch
 from devpilot.fixes.patch_manager import apply_patch, discard_patch, verify_patch
+from devpilot.fixes.test_generator import generate_test_scaffold
 from devpilot.memory.database import MemoryDB
 
 
@@ -79,14 +82,17 @@ class LocalAPI:
         has_report = rpath.is_file()
         mtime = rpath.stat().st_mtime if has_report else None
         report = load_latest_report(self.root, refresh_from_memory=False) if has_report else None
+        is_demo = self.root.name == "demo-app" or "examples/demo-app" in str(self.root)
+        repo_name = "Demo Project" if is_demo else self.root.name
         return {
             "has_report": has_report,
             "scan_id": report.scan_id if report else None,
             "finished_at": report.finished_at.isoformat() if report else None,
             "report_mtime": mtime,
             "repository": {
-                "name": self.root.name,
+                "name": repo_name,
                 "path": str(self.root),
+                "is_demo": is_demo,
             },
             "ai": {
                 "available": st.available,
@@ -184,11 +190,28 @@ class LocalAPI:
         return {"patch": patch}
 
     def set_repository(self, path_str: str) -> Path:
+        norm = path_str.strip().lower()
+        if norm in ("demo", "demo-app", "demo_app", ":demo", "examples/demo-app"):
+            candidates = [
+                Path.cwd() / "examples" / "demo-app",
+                Path(__file__).resolve().parent.parent.parent / "examples" / "demo-app",
+            ]
+            for c in candidates:
+                if c.is_dir():
+                    self.root = c.resolve()
+                    return self.root
         target = Path(path_str).expanduser().resolve()
         if not target.is_dir():
             raise APIHTTPError(400, f"Directory does not exist: {target}")
         self.root = target
         return self.root
+
+    def post_demo(self) -> dict[str, Any]:
+        self.set_repository("demo")
+        return {
+            "status": self.get_status(),
+            "report": self.get_report(),
+        }
 
     def _mask_key(self, key: str) -> str:
         if not key:
@@ -308,3 +331,21 @@ class LocalAPI:
             "status": self.get_status(),
             "report": report.model_dump(mode="json"),
         }
+
+    def get_mermaid(self) -> dict[str, Any]:
+        ctx = self._ctx()
+        cached_g = load_latest_graph(self.root)
+        graph = RepoGraph.from_dict(cached_g) if cached_g else RepoGraph.build(ctx)
+        return {"mermaid": export_mermaid(graph)}
+
+    def post_ask(self, body: dict[str, Any]) -> dict[str, Any]:
+        question = str(body.get("question") or "").strip()
+        if not question:
+            raise APIHTTPError(400, "Missing required 'question' parameter.")
+        return ask_codebase(self._ctx(), question)
+
+    def post_testgen(self, body: dict[str, Any]) -> dict[str, Any]:
+        symbol = str(body.get("symbol") or "").strip()
+        if not symbol:
+            raise APIHTTPError(400, "Missing required 'symbol' parameter.")
+        return generate_test_scaffold(self._ctx(), symbol)
